@@ -1,0 +1,27 @@
+# Build directories
+build/
+out/
+bin/
+obj/
+
+# Visual Studio / VS Code
+.vs/
+*.user
+*.userosscache
+*.sln
+*.vcxproj
+*.filters
+*.dir/
+
+# Except the ones we want in .vscode
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/c_cpp_properties.json
+
+# Logs and temp
+*.log
+templogs.txt
+
+# OS files
+.DS_Store
+Thumbs.db

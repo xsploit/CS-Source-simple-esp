@@ -1,0 +1,44 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "type": "cppbuild",
+      "label": "C/C++: cl.exe build active file",
+      "command": "cl.exe",
+      "args": [
+        "/Zi",
+        "/EHsc",
+        "/nologo",
+        "/Fe:",
+        "${fileDirname}\\AssaultCubeHack.exe",
+
+        // Project source files
+        "main.cpp",
+
+        // ImGui source files (cl.exe will compile them along with main)
+        "../imgui/imgui.cpp",
+        "../imgui/imgui_draw.cpp",
+        "../imgui/imgui_widgets.cpp",
+        "../imgui/imgui_tables.cpp",
+        "../imgui/imgui_impl_dx9.cpp",
+        "../imgui/imgui_impl_win32.cpp",
+
+        // Windows and DirectX libraries
+        "User32.lib",
+        "Advapi32.lib",
+        "Gdi32.lib",
+        "d3d9.lib",
+        "dwmapi.lib"
+      ],
+      "options": {
+        "cwd": "${fileDirname}"
+      },
+      "problemMatcher": ["$msCompile"],
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "detail": "compiler: cl.exe"
+    }
+  ]
+}
