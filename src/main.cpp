@@ -61,25 +61,29 @@ void DrawHealthBar(float x, float y, float height, int health, ImU32 color) {
 // float off the player because it's locked to their bones every frame).
 // externally we can't hook the game's renderer for true chams; this is the
 // closest an overlay gets to the chams feel.
-void DrawChams(ImDrawList* dl, const Vector3 bonesScreen[32],
+//
+// boneValid[bn] = whether that bone projected onscreen. we draw PER-LINK and
+// PER-JOINT, skipping any whose bones are offscreen — so a partial body still
+// renders when one hand or the head crosses the screen edge. (the old
+// all-or-nothing gate made chams flicker off whenever any single bone left
+// the frustum.)
+void DrawChams(ImDrawList* dl, const Vector3 bonesScreen[32], const bool boneValid[32],
                ImU32 skelColor, ImU32 coreColor,
                float thickness, float coreThick, float jointRad) {
     static const int majorJoints[] = { 14, 12, 11, 10, 0, 16, 29, 18, 31, 3, 7 };
 
-    // outer glow tubes — thick translucent lines along each bone link
+    // outer glow tubes + bright cores, per link — skip links with an offscreen endpoint
     for (int b = 0; b < g_SkeletonLinks; b++) {
-        const Vector3& a = bonesScreen[g_Skeleton[b].from];
-        const Vector3& c = bonesScreen[g_Skeleton[b].to];
+        int f = g_Skeleton[b].from, t = g_Skeleton[b].to;
+        if (!boneValid[f] || !boneValid[t]) continue;
+        const Vector3& a = bonesScreen[f];
+        const Vector3& c = bonesScreen[t];
         dl->AddLine({ a.x, a.y }, { c.x, c.y }, skelColor, thickness);
-    }
-    // bright core lines on top — gives the "neon tube" pop
-    for (int b = 0; b < g_SkeletonLinks; b++) {
-        const Vector3& a = bonesScreen[g_Skeleton[b].from];
-        const Vector3& c = bonesScreen[g_Skeleton[b].to];
         dl->AddLine({ a.x, a.y }, { c.x, c.y }, coreColor, coreThick);
     }
-    // joint dots — fills out the silhouette so overlapping limbs still read
+    // joint dots — only at joints that projected onscreen
     for (int j : majorJoints) {
+        if (!boneValid[j]) continue;
         const Vector3& p = bonesScreen[j];
         dl->AddCircleFilled({ p.x, p.y }, jointRad, skelColor);
         dl->AddCircleFilled({ p.x, p.y }, jointRad * 0.5f, coreColor);
@@ -371,33 +375,37 @@ int main() {
                                 Vector3 bonesWorld[g_BoneCount];
                                 for (int bn = 0; bn < g_BoneCount; bn++)
                                     bonesWorld[bn] = mem.Read<Matrix3x4>(bm + bn * 48).GetOrigin();
-                                // project all 32 to screen once
+                                // project each bone independently — a bone behind the
+                                // camera or offscreen gets valid=false, and we skip just
+                                // that link/joint below. (NOT all-or-nothing: that made
+                                // chams flicker off whenever any one bone left the frustum.)
                                 Vector3 bonesScreen[g_BoneCount];
-                                bool allOnscreen = true;
+                                bool boneValid[g_BoneCount] = {};
                                 for (int bn = 0; bn < g_BoneCount; bn++) {
-                                    if (!Utils::WorldToScreen(bonesWorld[bn], bonesScreen[bn], viewMatrix, overlay.GetWidth(), overlay.GetHeight())) {
-                                        allOnscreen = false; break;
-                                    }
+                                    boneValid[bn] = Utils::WorldToScreen(
+                                        bonesWorld[bn], bonesScreen[bn], viewMatrix,
+                                        overlay.GetWidth(), overlay.GetHeight());
                                 }
-                                if (allOnscreen) {
-                                    // thin skeleton first (under chams if both on)
+                                {
+                                    // thin skeleton first (under chams if both on) — per link
                                     if (g_Config.espSkeleton) {
                                         for (int b = 0; b < g_SkeletonLinks; b++) {
-                                            const Vector3& a = bonesScreen[g_Skeleton[b].from];
-                                            const Vector3& c = bonesScreen[g_Skeleton[b].to];
+                                            int f = g_Skeleton[b].from, t = g_Skeleton[b].to;
+                                            if (!boneValid[f] || !boneValid[t]) continue;
+                                            const Vector3& a = bonesScreen[f];
+                                            const Vector3& c = bonesScreen[t];
                                             drawList->AddLine({ a.x, a.y }, { c.x, c.y }, skelColor, 1.5f);
                                         }
                                     }
-                                    // bone-glow chams on top
+                                    // bone-glow chams on top — per link, partial body ok
                                     if (g_Config.espChams) {
-                                        // brighten the core: same hue, near-white intensity
                                         ImVec4 base = isMate ? g_Config.colTeam : g_Config.colEnemy;
                                         ImVec4 corev((std::min)(1.0f, base.x + 0.5f),
                                                      (std::min)(1.0f, base.y + 0.5f),
                                                      (std::min)(1.0f, base.z + 0.5f),
                                                      (base.w * alpha) / 255.0f);
                                         ImU32 coreColor = ImGui::ColorConvertFloat4ToU32(corev);
-                                        DrawChams(drawList, bonesScreen, baseColor, coreColor,
+                                        DrawChams(drawList, bonesScreen, boneValid, baseColor, coreColor,
                                                   g_Config.chamsThickness, g_Config.chamsCore, g_Config.chamsJointRad);
                                     }
                                 }
