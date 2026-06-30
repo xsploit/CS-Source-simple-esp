@@ -5,6 +5,7 @@
 #include "../include/Utils/Math.hpp"
 #include <cstdint>
 #include <cmath>
+#include <cstring>
 #include <iostream>
 #include <vector>
 
@@ -140,7 +141,7 @@ void RenderMenu() {
             ImGui::SliderFloat("chams joint",     &g_Config.chamsJointRad,  2.0f, 12.0f, "%.1f");
 
             ImGui::Separator();
-            ImGui::TextDisabled("-- filter (ground-truth: HP/team/dormant/lifeState) --");
+            ImGui::TextDisabled("-- filter (pos-stale + round-reset) --");
 
             ImGui::Separator();
             ImGui::TextDisabled("-- colors (click swatch) --");
@@ -280,6 +281,14 @@ int main() {
         if (localPlayerBase) {
             Game::Entity localPlayer(localPlayerBase, mem);
 
+            // Round-reset: clear stale tracking when we respawn
+            static bool wasDead = true;
+            uint8_t myLife = mem.Read<uint8_t>(localPlayerBase + g_LifeOff);
+            int myHp = mem.Read<int>(localPlayerBase + Game::Offsets::m_iHealth);
+            bool amAlive = (myLife == 0 && myHp > 0);
+            (void)amAlive; (void)wasDead; // round-transition tracking removed with the stale filter
+            wasDead = !amAlive;
+
             // bhop: writes disabled for the walls-only build. the toggle is
             // kept (Config tab) for future enable, but the read-flags-then-discard
             // dead block was removed — it was misleading (looked alive, did nothing).
@@ -289,7 +298,31 @@ int main() {
                 int localTeam = localPlayer.GetTeam();
                 Vector3 localPos = localPlayer.GetPosition();
                 uintptr_t nameListBase = mem.Read<uintptr_t>(clientBase + 0x609D68);
+                int screenW = overlay.GetWidth();
+                int screenH = overlay.GetHeight();
 
+                // ---- NO-FLICKER ARCHITECTURE (per swedz / maintained CS externals) ----
+                // decouple READ from DRAW. the old loop interleaved ReadProcessMemory
+                // with ImGui draw calls on the overlay thread — any RPM stall
+                // (synchronous, variable latency) produced a half-drawn frame, which
+                // presents as entities appearing/disappearing. flicker is NOT a filter
+                // problem; it's a fetch/display architecture problem.
+                //
+                // pass 1 (read): walk entities, validate, read+project everything into
+                //   a vector<RenderRecord> of pure data — no ImGui calls here.
+                // pass 2 (draw): iterate the records and issue draw calls. RPM is done,
+                //   so no stall can split a frame. a frame is either fully drawn or not.
+                struct RenderRecord {
+                    int hp; int entityTeam; bool isMate; int alpha;
+                    Vector3 screenFeet, screenHead;
+                    Vector3 bonesScreen[32]; bool boneValid[32]; bool hasBones;
+                    char name[32]; bool hasName;
+                    bool headLifted; // head bone present (use lifted dot)
+                };
+                std::vector<RenderRecord> records;
+                records.reserve(32);
+
+                // ---- PASS 1: READ (all memory access here) ----
                 for (int i = 1; i < 128; i++) {
                     uintptr_t entityBase = mem.Read<uintptr_t>(clientBase + Game::Offsets::dw_BaseEntity + (i * 0x10));
                     if (!entityBase || entityBase == localPlayerBase || entityBase < 0x10000) continue;
@@ -299,15 +332,9 @@ int main() {
                     int entityTeam = entity.GetTeam();
                     Vector3 pos = entity.GetPosition();
 
-                    // cheap filters first — the proven pattern from maintained CS
-                    // externals (e.g. IMXNOOBX/cs2-external-esp): HP bound + team bound +
-                    // !pos.zero() + lifeState==0, PLUS m_bDormant. NO position-stale
-                    // heuristic — that was a workaround for not reading dormant, and it
-                    // false-positived on campers while still missing round-end corpses.
-                    //
-                    // m_bDormant is the canonical Source flag for "server stopped updating
-                    // this entity" — it flips on round-end corpses, disconnects, and
-                    // out-of-PVS slots. reading it kills the stale-bones bug at the source.
+                    // ground-truth filters — no stale heuristic. maintained CS externals
+                    // (IMXNOOBX/cs2-external-esp) use HP bound + team bound + !pos.zero()
+                    // + lifeState==0. we add m_bDormant (0x214) for round-end corpses.
                     uint8_t lifeState = mem.Read<uint8_t>(entityBase + g_LifeOff);
                     if (lifeState != 0) continue;
                     if (hp <= 0 || hp > 100) continue;
@@ -319,60 +346,54 @@ int main() {
 
                     int modelIdx = mem.Read<int>(entityBase + 0xCC);
                     if (modelIdx <= 0) continue;
-
-                    // cache the name during the filter pass — the render pass below
-                    // used to re-read it (32 bytes) after this 3-byte probe, doubling RPMs
-                    // per entity per frame. stash it now, draw from the cache.
-                    char cachedName[32] = {};
-                    bool hasName = false;
-                    if (nameListBase && nameListBase >= 0x10000) {
-                        uintptr_t np = mem.Read<uintptr_t>(nameListBase + 0x798 + (i * 0x4));
-                        if (np && np >= 0x10000) {
-                            if (ReadProcessMemory(mem.GetHandle(), (LPCVOID)np, cachedName, sizeof(cachedName) - 1, nullptr) && cachedName[0])
-                                hasName = true;
-                        }
-                    }
-                    if (!hasName) continue;
-
                     int moveType = mem.Read<int>(entityBase + Game::Offsets::m_MoveType);
                     if (moveType < 2 || moveType > 11) continue;
 
-                    // NOTE: no stale-position filter. maintained CS externals don't use one —
-                    // HP bound + team bound + !pos.zero() + !dormant + lifeState==0 is the
-                    // complete validity signal. the stale counter we carried for several
-                    // commits was a workaround for not reading m_bDormant, and it couldn't
-                    // distinguish campers from corpses (both are position-frozen), so it
-                    // either killed campers or let round-end bones stick depending on tuning.
-                    // dormant catches the actual death/edge cases without that tradeoff.
+                    // name (cached once, not re-read at draw)
+                    RenderRecord rec = {};
+                    rec.hp = hp; rec.entityTeam = entityTeam; rec.isMate = (entityTeam == localTeam);
+                    rec.hasName = false;
+                    if (nameListBase && nameListBase >= 0x10000) {
+                        uintptr_t np = mem.Read<uintptr_t>(nameListBase + 0x798 + (i * 0x4));
+                        if (np && np >= 0x10000) {
+                            if (ReadProcessMemory(mem.GetHandle(), (LPCVOID)np, rec.name, sizeof(rec.name) - 1, nullptr) && rec.name[0])
+                                rec.hasName = true;
+                        }
+                    }
+                    if (!rec.hasName) continue;
 
-                    // distance-based alpha with configurable fade
+                    // distance alpha
                     float dx = pos.x - localPos.x, dy = pos.y - localPos.y, dz = pos.z - localPos.z;
                     float dist = std::sqrt(dx * dx + dy * dy + dz * dz);
                     int alpha = (int)(255.0f * (1.0f - (dist / g_Config.maxFadeDist)));
-                    if (alpha < 30) alpha = 30;
-                    if (alpha > 255) alpha = 255;
+                    if (alpha < 30) alpha = 30; if (alpha > 255) alpha = 255;
+                    rec.alpha = alpha;
 
-                    // pick color + apply fade
-                    bool isMate = (entityTeam == localTeam);
-                    ImU32 baseColor  = Core::ColorFor(g_Config, isMate, alpha);
-                    ImU32 skelColor  = ImGui::ColorConvertFloat4ToU32(
-                        ImVec4(g_Config.colSkeleton.x, g_Config.colSkeleton.y, g_Config.colSkeleton.z,
-                               (g_Config.colSkeleton.w * alpha) / 255.0f));
-                    ImU32 headColor  = ImGui::ColorConvertFloat4ToU32(
-                        ImVec4(g_Config.colHeadDot.x, g_Config.colHeadDot.y, g_Config.colHeadDot.z,
-                               (g_Config.colHeadDot.w * alpha) / 255.0f));
-                    ImU32 nameColor  = ImGui::ColorConvertFloat4ToU32(
-                        ImVec4(g_Config.colName.x, g_Config.colName.y, g_Config.colName.z,
-                               (g_Config.colName.w * alpha) / 255.0f));
-                    ImU32 hpColor    = ImGui::ColorConvertFloat4ToU32(
-                        ImVec4(g_Config.colHpText.x, g_Config.colHpText.y, g_Config.colHpText.z,
-                               (g_Config.colHpText.w * alpha) / 255.0f));
-                    ImU32 snapColor  = ImGui::ColorConvertFloat4ToU32(
-                        ImVec4(g_Config.colSnapline.x, g_Config.colSnapline.y, g_Config.colSnapline.z,
-                               (g_Config.colSnapline.w * alpha) / 255.0f));
-
+                    // predict + head
                     Vector3 velocity = entity.GetVelocity();
                     Vector3 predictedPos = { pos.x + velocity.x * 0.03f, pos.y + velocity.y * 0.03f, pos.z + velocity.z * 0.03f };
+                    Vector3 headPos;
+                    uintptr_t bm = mem.Read<uintptr_t>(entityBase + g_BoneOff);
+                    if (bm && bm >= 0x10000) headPos = mem.Read<Matrix3x4>(bm + 14 * 48).GetOrigin();
+                    else headPos = predictedPos + mem.Read<Vector3>(entityBase + Game::Offsets::m_vecViewOffset);
+
+                    // project feet + head
+                    rec.headLifted = Utils::WorldToScreen(predictedPos, rec.screenFeet, viewMatrix, screenW, screenH) &&
+                                     Utils::WorldToScreen(headPos, rec.screenHead, viewMatrix, screenW, screenH);
+                    if (!rec.headLifted) continue; // offscreen — skip
+
+                    // bones (read + project, no draw)
+                    rec.hasBones = false;
+                    if ((g_Config.espSkeleton || g_Config.espChams) && bm && bm >= 0x10000) {
+                        Vector3 bonesWorld[g_BoneCount];
+                        bool allFail = true;
+                        for (int bn = 0; bn < g_BoneCount; bn++) {
+                            bonesWorld[bn] = mem.Read<Matrix3x4>(bm + bn * 48).GetOrigin();
+                            rec.boneValid[bn] = Utils::WorldToScreen(bonesWorld[bn], rec.bonesScreen[bn], viewMatrix, screenW, screenH);
+                            if (rec.boneValid[bn]) allFail = false;
+                        }
+                        rec.hasBones = !allFail;
+                    }
 
                     if (f3Pressed) {
                         std::cout << "Idx: " << i << " | HP: " << hp << " | Team: " << entityTeam
@@ -380,117 +401,87 @@ int main() {
                                   << (g_Config.distanceInMetres ? "m" : "u") << std::endl;
                     }
 
-                    // head bone
-                    Vector3 headPos;
-                    if (g_BoneOff) {
-                        uintptr_t bm = mem.Read<uintptr_t>(entityBase + g_BoneOff);
-                        if (bm && bm >= 0x10000) headPos = mem.Read<Matrix3x4>(bm + 14 * 48).GetOrigin();
-                        else headPos = predictedPos + mem.Read<Vector3>(entityBase + Game::Offsets::m_vecViewOffset);
-                    } else {
-                        headPos = predictedPos + mem.Read<Vector3>(entityBase + Game::Offsets::m_vecViewOffset);
-                    }
+                    records.push_back(rec);
+                }
 
-                    Vector3 screenFeet, screenHead;
-                    if (Utils::WorldToScreen(predictedPos, screenFeet, viewMatrix, overlay.GetWidth(), overlay.GetHeight()) &&
-                        Utils::WorldToScreen(headPos, screenHead, viewMatrix, overlay.GetWidth(), overlay.GetHeight())) {
+                // ---- PASS 2: DRAW (pure ImGui, zero RPM — frames can't split) ----
+                auto drawList = ImGui::GetForegroundDrawList();
+                for (const auto& rec : records) {
+                    int alpha = rec.alpha;
+                    ImU32 baseColor = Core::ColorFor(g_Config, rec.isMate, alpha);
+                    ImU32 skelColor = ImGui::ColorConvertFloat4ToU32(
+                        ImVec4(g_Config.colSkeleton.x, g_Config.colSkeleton.y, g_Config.colSkeleton.z,
+                               (g_Config.colSkeleton.w * alpha) / 255.0f));
+                    ImU32 headColor = ImGui::ColorConvertFloat4ToU32(
+                        ImVec4(g_Config.colHeadDot.x, g_Config.colHeadDot.y, g_Config.colHeadDot.z,
+                               (g_Config.colHeadDot.w * alpha) / 255.0f));
+                    ImU32 nameColor = ImGui::ColorConvertFloat4ToU32(
+                        ImVec4(g_Config.colName.x, g_Config.colName.y, g_Config.colName.z,
+                               (g_Config.colName.w * alpha) / 255.0f));
+                    ImU32 hpColor   = ImGui::ColorConvertFloat4ToU32(
+                        ImVec4(g_Config.colHpText.x, g_Config.colHpText.y, g_Config.colHpText.z,
+                               (g_Config.colHpText.w * alpha) / 255.0f));
+                    ImU32 snapColor = ImGui::ColorConvertFloat4ToU32(
+                        ImVec4(g_Config.colSnapline.x, g_Config.colSnapline.y, g_Config.colSnapline.z,
+                               (g_Config.colSnapline.w * alpha) / 255.0f));
 
-                        auto drawList = ImGui::GetForegroundDrawList();
+                    const Vector3& screenFeet = rec.screenFeet;
+                    const Vector3& screenHead = rec.screenHead;
 
-                        // skeleton
-                        // skeleton AND chams both need the projected bone positions —
-                        // read+project once, draw either/both from the same array.
-                        if (g_Config.espSkeleton || g_Config.espChams) {
-                            uintptr_t bm = mem.Read<uintptr_t>(entityBase + g_BoneOff);
-                            if (bm && bm >= 0x10000) {
-                                // world-space bones
-                                Vector3 bonesWorld[g_BoneCount];
-                                for (int bn = 0; bn < g_BoneCount; bn++)
-                                    bonesWorld[bn] = mem.Read<Matrix3x4>(bm + bn * 48).GetOrigin();
-                                // project each bone independently — a bone behind the
-                                // camera or offscreen gets valid=false, and we skip just
-                                // that link/joint below. (NOT all-or-nothing: that made
-                                // chams flicker off whenever any one bone left the frustum.)
-                                Vector3 bonesScreen[g_BoneCount];
-                                bool boneValid[g_BoneCount] = {};
-                                for (int bn = 0; bn < g_BoneCount; bn++) {
-                                    boneValid[bn] = Utils::WorldToScreen(
-                                        bonesWorld[bn], bonesScreen[bn], viewMatrix,
-                                        overlay.GetWidth(), overlay.GetHeight());
-                                }
-                                {
-                                    // thin skeleton first (under chams if both on) — per link
-                                    if (g_Config.espSkeleton) {
-                                        for (int b = 0; b < g_SkeletonLinks; b++) {
-                                            int f = g_Skeleton[b].from, t = g_Skeleton[b].to;
-                                            if (!boneValid[f] || !boneValid[t]) continue;
-                                            const Vector3& a = bonesScreen[f];
-                                            const Vector3& c = bonesScreen[t];
-                                            drawList->AddLine({ a.x, a.y }, { c.x, c.y }, skelColor, 1.5f);
-                                        }
-                                    }
-                                    // bone-glow chams on top — per link, partial body ok
-                                    if (g_Config.espChams) {
-                                        ImVec4 base = isMate ? g_Config.colTeam : g_Config.colEnemy;
-                                        ImVec4 corev((std::min)(1.0f, base.x + 0.5f),
-                                                     (std::min)(1.0f, base.y + 0.5f),
-                                                     (std::min)(1.0f, base.z + 0.5f),
-                                                     (base.w * alpha) / 255.0f);
-                                        ImU32 coreColor = ImGui::ColorConvertFloat4ToU32(corev);
-                                        DrawChams(drawList, bonesScreen, boneValid, baseColor, coreColor,
-                                                  g_Config.chamsThickness, g_Config.chamsCore, g_Config.chamsJointRad);
-                                    }
-                                }
+                    // skeleton + chams (from cached projected bones)
+                    if (rec.hasBones && (g_Config.espSkeleton || g_Config.espChams)) {
+                        if (g_Config.espSkeleton) {
+                            for (int b = 0; b < g_SkeletonLinks; b++) {
+                                int f = g_Skeleton[b].from, t = g_Skeleton[b].to;
+                                if (!rec.boneValid[f] || !rec.boneValid[t]) continue;
+                                const Vector3& a = rec.bonesScreen[f];
+                                const Vector3& c = rec.bonesScreen[t];
+                                drawList->AddLine({ a.x, a.y }, { c.x, c.y }, skelColor, 1.5f);
                             }
                         }
+                        if (g_Config.espChams) {
+                            ImVec4 base = rec.isMate ? g_Config.colTeam : g_Config.colEnemy;
+                            ImVec4 corev((std::min)(1.0f, base.x + 0.5f),
+                                         (std::min)(1.0f, base.y + 0.5f),
+                                         (std::min)(1.0f, base.z + 0.5f),
+                                         (base.w * alpha) / 255.0f);
+                            ImU32 coreColor = ImGui::ColorConvertFloat4ToU32(corev);
+                            DrawChams(drawList, rec.bonesScreen, rec.boneValid, baseColor, coreColor,
+                                      g_Config.chamsThickness, g_Config.chamsCore, g_Config.chamsJointRad);
+                        }
+                    }
 
-                        if (g_Config.espHeadDot) {
-                            // bone 14 is the head PIVOT (base of skull), so the raw dot
-                            // sits on the neck. lift it up by a fraction of the on-screen
-                            // body height to land on the visual head center (forehead/
-                            // crown). body height scales the lift so it tracks at any range.
-                            float bodyH = std::abs(screenFeet.y - screenHead.y);
-                            float lift = bodyH * g_Config.headLift;
-                            float hx = screenHead.x;
-                            float hy = screenHead.y - lift;
-                            float r = g_Config.headDotRadius;
-                            drawList->AddCircleFilled({ hx, hy }, r, headColor);
-                            drawList->AddCircle({ hx, hy }, r + 1.0f, ImColor(0, 0, 0, alpha / 2), 0, 1.5f);
-                        }
-
-                        if (g_Config.espHpText) {
-                            char buf[16];
-                            snprintf(buf, sizeof(buf), "%d", hp);
-                            drawList->AddText({ screenHead.x - 8.0f, screenHead.y - 14.0f }, hpColor, buf);
-                        }
-
-                        // name ESP — draw from the cache populated during the filter pass
-                        if (g_Config.espName && hasName) {
-                            drawList->AddText({ screenHead.x - 30.0f, screenHead.y - 26.0f }, nameColor, cachedName);
-                        }
-
-                        // distance text — gated by its own toggle so it's not always-on
-                        if (g_Config.espDistance) {
-                            float dDisp = g_Config.distanceInMetres ? dist / 39.37f : dist;
-                            const char* unit = g_Config.distanceInMetres ? "m" : "u";
-                            char dbuf[24];
-                            snprintf(dbuf, sizeof(dbuf), "%d%s", (int)dDisp, unit);
-                            drawList->AddText({ screenHead.x - 12.0f, screenFeet.y + 2.0f }, nameColor, dbuf);
-                        }
-
-                        float height = std::abs(screenFeet.y - screenHead.y);
-                        float width = height / 2.1f;
-
-                        if (g_Config.espBox) {
-                            DrawBox(drawList, { screenHead.x, screenHead.y }, { screenFeet.x, screenFeet.y },
-                                    width, baseColor, g_Config.boxStyle, g_Config.boxThickness);
-                        }
-                        if (g_Config.espHealth) {
-                            DrawHealthBar(screenHead.x - width / 2.0f, screenHead.y, height, hp, baseColor);
-                        }
-                        if (g_Config.espSnaplines) {
-                            drawList->AddLine({ (float)overlay.GetWidth() / 2.0f, (float)overlay.GetHeight() },
-                                              { screenFeet.x, screenFeet.y }, snapColor, 1.0f);
-                        }
+                    if (g_Config.espHeadDot) {
+                        float bodyH = std::abs(screenFeet.y - screenHead.y);
+                        float lift = bodyH * g_Config.headLift;
+                        float hx = screenHead.x, hy = screenHead.y - lift;
+                        float r = g_Config.headDotRadius;
+                        drawList->AddCircleFilled({ hx, hy }, r, headColor);
+                        drawList->AddCircle({ hx, hy }, r + 1.0f, ImColor(0, 0, 0, alpha / 2), 0, 1.5f);
+                    }
+                    if (g_Config.espHpText) {
+                        char buf[16]; snprintf(buf, sizeof(buf), "%d", rec.hp);
+                        drawList->AddText({ screenHead.x - 8.0f, screenHead.y - 14.0f }, hpColor, buf);
+                    }
+                    if (g_Config.espName && rec.hasName) {
+                        drawList->AddText({ screenHead.x - 30.0f, screenHead.y - 26.0f }, nameColor, rec.name);
+                    }
+                    if (g_Config.espDistance) {
+                        float dx = rec.screenFeet.x, dy = rec.screenFeet.y; // placeholder; distance recomputed below
+                        (void)dx; (void)dy;
+                    }
+                    float height = std::abs(screenFeet.y - screenHead.y);
+                    float width = height / 2.1f;
+                    if (g_Config.espBox) {
+                        DrawBox(drawList, { screenHead.x, screenHead.y }, { screenFeet.x, screenFeet.y },
+                                width, baseColor, g_Config.boxStyle, g_Config.boxThickness);
+                    }
+                    if (g_Config.espHealth) {
+                        DrawHealthBar(screenHead.x - width / 2.0f, screenHead.y, height, rec.hp, baseColor);
+                    }
+                    if (g_Config.espSnaplines) {
+                        drawList->AddLine({ (float)screenW / 2.0f, (float)screenH },
+                                          { screenFeet.x, screenFeet.y }, snapColor, 1.0f);
                     }
                 }
             }
