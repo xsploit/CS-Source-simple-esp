@@ -64,6 +64,7 @@ void Config::Save() const {
     f << "  \"chamsThickness\": "    << chamsThickness                        << ",\n";
     f << "  \"chamsCore\": "         << chamsCore                             << ",\n";
     f << "  \"chamsJointRad\": "     << chamsJointRad                         << ",\n";
+    f << "  \"staleFrames\": "       << staleFrames                           << ",\n";
     f << "  \"colEnemy\": "          << VecToJson(colEnemy)                   << ",\n";
     f << "  \"colTeam\": "           << VecToJson(colTeam)                    << ",\n";
     f << "  \"colSkeleton\": "       << VecToJson(colSkeleton)                << ",\n";
@@ -136,6 +137,7 @@ void Config::Load() {
         else if (key == "chamsThickness") chamsThickness = (float)atof(val.c_str());
         else if (key == "chamsCore")      chamsCore      = (float)atof(val.c_str());
         else if (key == "chamsJointRad")  chamsJointRad  = (float)atof(val.c_str());
+        else if (key == "staleFrames")    staleFrames    = atoi(val.c_str());
     }
 }
 

@@ -133,6 +133,11 @@ void RenderMenu() {
             ImGui::SliderFloat("chams joint",     &g_Config.chamsJointRad,  2.0f, 12.0f, "%.1f");
 
             ImGui::Separator();
+            ImGui::TextDisabled("-- filter --");
+            ImGui::SliderInt("stale timeout (frames)", &g_Config.staleFrames, 30, 600);
+            ImGui::SameLine(); ImGui::TextDisabled("(~%.0fs)", g_Config.staleFrames / 60.0f);
+
+            ImGui::Separator();
             ImGui::TextDisabled("-- colors (click swatch) --");
             ImGui::ColorEdit4("enemy",     &g_Config.colEnemy.x,   ImGuiColorEditFlags_NoInputs);
             ImGui::ColorEdit4("team",      &g_Config.colTeam.x,    ImGuiColorEditFlags_NoInputs);
@@ -308,11 +313,12 @@ int main() {
                     int moveType = mem.Read<int>(entityBase + Game::Offsets::m_MoveType);
                     if (moveType < 2 || moveType > 11) continue;
 
-                    // stale check LAST
+                    // stale check LAST: frozen in place past the configured threshold.
+                    // default 180 frames @ ~60fps = 3s, so real campers don't vanish.
                     if (g_LastPos[i].x == pos.x && g_LastPos[i].y == pos.y && g_LastPos[i].z == pos.z)
                         g_StaleFrames[i]++;
                     else { g_StaleFrames[i] = 0; g_LastPos[i] = pos; }
-                    if (g_StaleFrames[i] > 60) continue;
+                    if (g_StaleFrames[i] > g_Config.staleFrames) continue;
 
                     // distance-based alpha with configurable fade
                     float dx = pos.x - localPos.x, dy = pos.y - localPos.y, dz = pos.z - localPos.z;

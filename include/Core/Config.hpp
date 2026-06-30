@@ -42,6 +42,12 @@ struct Config {
     float chamsCore      = 3.0f;   // bright inner core line thickness
     float chamsJointRad  = 5.0f;   // filled circle radius at major joints
 
+    // ---- entity filter tuning ----
+    // a player frozen in place for this many frames is treated as stale
+    // (disconnected/dead-but-not-flagged) and skipped. at ~60fps overlay rate,
+    // 180 frames = 3 seconds — long enough that real campers don't vanish.
+    int   staleFrames    = 180;
+
     // ---- colors (float 0..1, alpha included) ----
     ImVec4 colEnemy     = ImVec4(1.00f, 0.00f, 0.00f, 1.0f); // red
     ImVec4 colTeam      = ImVec4(0.00f, 1.00f, 0.00f, 1.0f); // green
