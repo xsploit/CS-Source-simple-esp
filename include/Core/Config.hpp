@@ -25,6 +25,7 @@ struct Config {
     bool espTeam      = false;     // show teammates
     bool espSnaplines = false;
     bool espSkeleton  = true;
+    bool espChams     = false;     // bone-glow chams (thick glowing body shape)
     bool espName      = false;
     bool espHpText    = true;
     bool bhopEnabled  = false;     // walls-only build: off + writes disabled
@@ -35,6 +36,11 @@ struct Config {
     float boxThickness = 1.5f;
     bool distanceInMetres = true;  // false = raw Hammer units
     float maxFadeDist   = 2000.0f; // beyond this, alpha floors at min
+
+    // ---- chams tuning ----
+    float chamsThickness = 10.0f;  // outer glow tube radius (px)
+    float chamsCore      = 3.0f;   // bright inner core line thickness
+    float chamsJointRad  = 5.0f;   // filled circle radius at major joints
 
     // ---- colors (float 0..1, alpha included) ----
     ImVec4 colEnemy     = ImVec4(1.00f, 0.00f, 0.00f, 1.0f); // red

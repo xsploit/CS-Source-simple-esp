@@ -55,6 +55,37 @@ void DrawHealthBar(float x, float y, float height, int health, ImU32 color) {
     ImGui::GetBackgroundDrawList()->AddRectFilled({ x - 5.0f, y + height - (height * fill) }, { x - 3.0f, y + height }, color);
 }
 
+// bone-glow chams: thick translucent tube per bone segment + bright core line
+// on top + filled joint dots at major joints. reads as a glowing body shape
+// that tracks the model's real pose (unlike a screen-space box, this can't
+// float off the player because it's locked to their bones every frame).
+// externally we can't hook the game's renderer for true chams; this is the
+// closest an overlay gets to the chams feel.
+void DrawChams(ImDrawList* dl, const Vector3 bonesScreen[32],
+               ImU32 skelColor, ImU32 coreColor,
+               float thickness, float coreThick, float jointRad) {
+    static const int majorJoints[] = { 14, 12, 11, 10, 0, 16, 29, 18, 31, 3, 7 };
+
+    // outer glow tubes — thick translucent lines along each bone link
+    for (int b = 0; b < g_SkeletonLinks; b++) {
+        const Vector3& a = bonesScreen[g_Skeleton[b].from];
+        const Vector3& c = bonesScreen[g_Skeleton[b].to];
+        dl->AddLine({ a.x, a.y }, { c.x, c.y }, skelColor, thickness);
+    }
+    // bright core lines on top — gives the "neon tube" pop
+    for (int b = 0; b < g_SkeletonLinks; b++) {
+        const Vector3& a = bonesScreen[g_Skeleton[b].from];
+        const Vector3& c = bonesScreen[g_Skeleton[b].to];
+        dl->AddLine({ a.x, a.y }, { c.x, c.y }, coreColor, coreThick);
+    }
+    // joint dots — fills out the silhouette so overlapping limbs still read
+    for (int j : majorJoints) {
+        const Vector3& p = bonesScreen[j];
+        dl->AddCircleFilled({ p.x, p.y }, jointRad, skelColor);
+        dl->AddCircleFilled({ p.x, p.y }, jointRad * 0.5f, coreColor);
+    }
+}
+
 void RenderMenu() {
     if (!g_Config.menuOpen) return;
 
@@ -90,6 +121,12 @@ void RenderMenu() {
             ImGui::TextDisabled("-- distance --");
             ImGui::Checkbox("show metres (vs raw units)", &g_Config.distanceInMetres);
             ImGui::SliderFloat("fade distance", &g_Config.maxFadeDist, 500.0f, 6000.0f, "%.0f");
+
+            ImGui::Separator();
+            ImGui::TextDisabled("-- chams --");
+            ImGui::SliderFloat("chams thickness", &g_Config.chamsThickness, 4.0f, 20.0f, "%.1f");
+            ImGui::SliderFloat("chams core",      &g_Config.chamsCore,      1.0f, 8.0f,  "%.1f");
+            ImGui::SliderFloat("chams joint",     &g_Config.chamsJointRad,  2.0f, 12.0f, "%.1f");
 
             ImGui::Separator();
             ImGui::TextDisabled("-- colors (click swatch) --");
@@ -325,17 +362,43 @@ int main() {
                         auto drawList = ImGui::GetForegroundDrawList();
 
                         // skeleton
-                        if (g_Config.espSkeleton) {
+                        // skeleton AND chams both need the projected bone positions —
+                        // read+project once, draw either/both from the same array.
+                        if (g_Config.espSkeleton || g_Config.espChams) {
                             uintptr_t bm = mem.Read<uintptr_t>(entityBase + g_BoneOff);
                             if (bm && bm >= 0x10000) {
-                                Vector3 bones[g_BoneCount];
+                                // world-space bones
+                                Vector3 bonesWorld[g_BoneCount];
                                 for (int bn = 0; bn < g_BoneCount; bn++)
-                                    bones[bn] = mem.Read<Matrix3x4>(bm + bn * 48).GetOrigin();
-                                for (int b = 0; b < g_SkeletonLinks; b++) {
-                                    Vector3 scrA, scrB;
-                                    if (Utils::WorldToScreen(bones[g_Skeleton[b].from], scrA, viewMatrix, overlay.GetWidth(), overlay.GetHeight()) &&
-                                        Utils::WorldToScreen(bones[g_Skeleton[b].to], scrB, viewMatrix, overlay.GetWidth(), overlay.GetHeight())) {
-                                        drawList->AddLine({ scrA.x, scrA.y }, { scrB.x, scrB.y }, skelColor, 1.5f);
+                                    bonesWorld[bn] = mem.Read<Matrix3x4>(bm + bn * 48).GetOrigin();
+                                // project all 32 to screen once
+                                Vector3 bonesScreen[g_BoneCount];
+                                bool allOnscreen = true;
+                                for (int bn = 0; bn < g_BoneCount; bn++) {
+                                    if (!Utils::WorldToScreen(bonesWorld[bn], bonesScreen[bn], viewMatrix, overlay.GetWidth(), overlay.GetHeight())) {
+                                        allOnscreen = false; break;
+                                    }
+                                }
+                                if (allOnscreen) {
+                                    // thin skeleton first (under chams if both on)
+                                    if (g_Config.espSkeleton) {
+                                        for (int b = 0; b < g_SkeletonLinks; b++) {
+                                            const Vector3& a = bonesScreen[g_Skeleton[b].from];
+                                            const Vector3& c = bonesScreen[g_Skeleton[b].to];
+                                            drawList->AddLine({ a.x, a.y }, { c.x, c.y }, skelColor, 1.5f);
+                                        }
+                                    }
+                                    // bone-glow chams on top
+                                    if (g_Config.espChams) {
+                                        // brighten the core: same hue, near-white intensity
+                                        ImVec4 base = isMate ? g_Config.colTeam : g_Config.colEnemy;
+                                        ImVec4 corev((std::min)(1.0f, base.x + 0.5f),
+                                                     (std::min)(1.0f, base.y + 0.5f),
+                                                     (std::min)(1.0f, base.z + 0.5f),
+                                                     (base.w * alpha) / 255.0f);
+                                        ImU32 coreColor = ImGui::ColorConvertFloat4ToU32(corev);
+                                        DrawChams(drawList, bonesScreen, baseColor, coreColor,
+                                                  g_Config.chamsThickness, g_Config.chamsCore, g_Config.chamsJointRad);
                                     }
                                 }
                             }

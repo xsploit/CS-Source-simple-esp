@@ -61,6 +61,9 @@ void Config::Save() const {
     f << "  \"boxThickness\": "      << boxThickness                          << ",\n";
     f << "  \"distanceInMetres\": "  << (distanceInMetres ? "true" : "false")  << ",\n";
     f << "  \"maxFadeDist\": "       << maxFadeDist                           << ",\n";
+    f << "  \"chamsThickness\": "    << chamsThickness                        << ",\n";
+    f << "  \"chamsCore\": "         << chamsCore                             << ",\n";
+    f << "  \"chamsJointRad\": "     << chamsJointRad                         << ",\n";
     f << "  \"colEnemy\": "          << VecToJson(colEnemy)                   << ",\n";
     f << "  \"colTeam\": "           << VecToJson(colTeam)                    << ",\n";
     f << "  \"colSkeleton\": "       << VecToJson(colSkeleton)                << ",\n";
@@ -130,6 +133,9 @@ void Config::Load() {
         if (key == "boxStyle")     boxStyle     = atoi(val.c_str());
         else if (key == "boxThickness")  boxThickness = (float)atof(val.c_str());
         else if (key == "maxFadeDist")   maxFadeDist  = (float)atof(val.c_str());
+        else if (key == "chamsThickness") chamsThickness = (float)atof(val.c_str());
+        else if (key == "chamsCore")      chamsCore      = (float)atof(val.c_str());
+        else if (key == "chamsJointRad")  chamsJointRad  = (float)atof(val.c_str());
     }
 }
 
