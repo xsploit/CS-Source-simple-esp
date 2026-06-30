@@ -331,12 +331,34 @@ int main() {
                     int moveType = mem.Read<int>(entityBase + Game::Offsets::m_MoveType);
                     if (moveType < 2 || moveType > 11) continue;
 
-                    // stale check LAST: frozen in place past the configured threshold.
-                    // default 180 frames @ ~60fps = 3s, so real campers don't vanish.
-                    if (g_LastPos[i].x == pos.x && g_LastPos[i].y == pos.y && g_LastPos[i].z == pos.z)
+                    // CAMPER-SAFE stale check LAST. the old logic culled ANY entity that
+                    // hadn't moved in N frames — which nuked campers holding an angle, since
+                    // a live player holding still looks identical to a dead-but-not-flagged
+                    // body if you only watch position.
+                    //
+                    // the real alive signal is lifeState (0=alive) + HP>0, both of which we
+                    // already validated above. so a fully-valid live entity is NEVER culled
+                    // for being still. the stale-position check now only catches the rare
+                    // ambiguous slot (lifeState reads alive but the entity has fallen out of
+                    // the server's update stream — disconnected/dead-but-not-flagged), which
+                    // shows up as position-frozen AND a zero/unchanged HP. genuine campers
+                    // keep rendering forever.
+                    if (g_LastPos[i].x == pos.x && g_LastPos[i].y == pos.y && g_LastPos[i].z == pos.z) {
                         g_StaleFrames[i]++;
-                    else { g_StaleFrames[i] = 0; g_LastPos[i] = pos; }
-                    if (g_StaleFrames[i] > g_Config.staleFrames) continue;
+                    } else {
+                        g_StaleFrames[i] = 0;
+                        g_LastPos[i] = pos;
+                    }
+                    // only cull on stale if a fresh read ALSO says dead — never cull a
+                    // confirmed-alive camper.
+                    if (g_StaleFrames[i] > g_Config.staleFrames) {
+                        uint8_t lifeNow = mem.Read<uint8_t>(entityBase + g_LifeOff);
+                        int hpNow = mem.Read<int>(entityBase + Game::Offsets::m_iHealth);
+                        if (lifeNow != 0 || hpNow <= 0 || hpNow > 100) continue;
+                        // alive but frozen — reset the counter so we don't re-check every
+                        // frame (the fresh read is the expensive part). entity keeps drawing.
+                        g_StaleFrames[i] = g_Config.staleFrames / 2;
+                    }
 
                     // distance-based alpha with configurable fade
                     float dx = pos.x - localPos.x, dy = pos.y - localPos.y, dz = pos.z - localPos.z;
