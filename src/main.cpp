@@ -301,6 +301,15 @@ int main() {
                 int screenW = overlay.GetWidth();
                 int screenH = overlay.GetHeight();
 
+                // SELF-CALIBRATING DORMANT (pattern stolen from arukenimon/CS-Source-Internal):
+                // instead of assuming dormant==0 means "active" (a magic value that could
+                // change between builds), read the LOCAL player's dormant byte as the
+                // known-good reference (you are always non-dormant to yourself) and
+                // compare each entity to it. any entity whose dormant differs from yours
+                // is in a different update state = round-end corpse / disconnected /
+                // out-of-PVS. self-calibrates; no magic number to maintain.
+                uint8_t myDormant = mem.Read<uint8_t>(localPlayerBase + Game::Offsets::m_bDormant);
+
                 // ---- NO-FLICKER ARCHITECTURE (per swedz / maintained CS externals) ----
                 // decouple READ from DRAW. the old loop interleaved ReadProcessMemory
                 // with ImGui draw calls on the overlay thread — any RPM stall
@@ -318,6 +327,7 @@ int main() {
                     Vector3 bonesScreen[32]; bool boneValid[32]; bool hasBones;
                     char name[32]; bool hasName;
                     bool headLifted; // head bone present (use lifted dot)
+                    float headRadius; // range-scaled: project 4u above head, use on-screen delta
                 };
                 std::vector<RenderRecord> records;
                 records.reserve(32);
@@ -341,7 +351,7 @@ int main() {
                     if (entityTeam < 2 || entityTeam > 3) continue;
                     if (std::abs(pos.x) < 1.0f && std::abs(pos.y) < 1.0f && std::abs(pos.z) < 1.0f) continue;
                     uint8_t dormant = mem.Read<uint8_t>(entityBase + Game::Offsets::m_bDormant);
-                    if (dormant != 0) continue;
+                    if (dormant != myDormant) continue;  // self-calibrated vs local player
                     if (!g_Config.espTeam && entityTeam == localTeam) continue;
 
                     int modelIdx = mem.Read<int>(entityBase + 0xCC);
@@ -381,6 +391,21 @@ int main() {
                     rec.headLifted = Utils::WorldToScreen(predictedPos, rec.screenFeet, viewMatrix, screenW, screenH) &&
                                      Utils::WorldToScreen(headPos, rec.screenHead, viewMatrix, screenW, screenH);
                     if (!rec.headLifted) continue; // offscreen — skip
+
+                    // RANGE-SCALED HEAD RADIUS (pattern from arukenimon): project a point
+                    // 4 world-units above the head bone and use the on-screen vertical delta
+                    // as the circle radius. auto-scales with range — close enemy = big
+                    // circle, far = small — instead of a fixed pixel size that's wrong at
+                    // every distance but one. floor at headDotRadius so far targets still
+                    // render a visible dot.
+                    Vector3 aboveHead = { headPos.x, headPos.y, headPos.z + 4.0f };
+                    Vector3 aboveHeadScreen;
+                    if (Utils::WorldToScreen(aboveHead, aboveHeadScreen, viewMatrix, screenW, screenH)) {
+                        float r = std::fabs(aboveHeadScreen.y - rec.screenHead.y);
+                        rec.headRadius = (r > g_Config.headDotRadius) ? r : g_Config.headDotRadius;
+                    } else {
+                        rec.headRadius = g_Config.headDotRadius;
+                    }
 
                     // bones (read + project, no draw)
                     rec.hasBones = false;
@@ -452,10 +477,13 @@ int main() {
                     }
 
                     if (g_Config.espHeadDot) {
+                        // the dot is lifted to the visual head center (bone 14 is the pivot)
+                        // and sized to the actual head via the range-scaled radius computed
+                        // in the read pass. close enemy = head-sized circle, far = small dot.
                         float bodyH = std::abs(screenFeet.y - screenHead.y);
                         float lift = bodyH * g_Config.headLift;
                         float hx = screenHead.x, hy = screenHead.y - lift;
-                        float r = g_Config.headDotRadius;
+                        float r = rec.headRadius;
                         drawList->AddCircleFilled({ hx, hy }, r, headColor);
                         drawList->AddCircle({ hx, hy }, r + 1.0f, ImColor(0, 0, 0, alpha / 2), 0, 1.5f);
                     }
