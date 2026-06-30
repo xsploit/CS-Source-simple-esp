@@ -11,7 +11,9 @@ namespace Game {
 
         int GetHealth();
         int GetTeam();
+        uint8_t GetLifeState();
         Vector3 GetPosition();
+        Vector3 GetVelocity();
         Vector3 GetViewOffset();
         int GetFlags();
         int GetFov();
@@ -19,6 +21,9 @@ namespace Game {
         float GetModelScale();
 
         int GetAmmo(uintptr_t clientBase);
+
+        // Reads the bone matrix for boneCount bones into out[], returns number read
+        int GetBonePositions(Vector3* out, int maxBones);
 
         uintptr_t GetBase() const { return m_Base; }
 
