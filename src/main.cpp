@@ -140,11 +140,7 @@ void RenderMenu() {
             ImGui::SliderFloat("chams joint",     &g_Config.chamsJointRad,  2.0f, 12.0f, "%.1f");
 
             ImGui::Separator();
-            ImGui::TextDisabled("-- filter --");
-            ImGui::SliderInt("stale timeout (frames)", &g_Config.staleFrames, 30, 600);
-            ImGui::SameLine(); ImGui::TextDisabled("(~%.0fs)", g_Config.staleFrames / 60.0f);
-            ImGui::SliderInt("stale hard limit (frames)", &g_Config.staleHardFrames, 300, 1800);
-            ImGui::SameLine(); ImGui::TextDisabled("(~%.0fs)", g_Config.staleHardFrames / 60.0f);
+            ImGui::TextDisabled("-- filter (ground-truth: HP/team/dormant/lifeState) --");
 
             ImGui::Separator();
             ImGui::TextDisabled("-- colors (click swatch) --");
@@ -257,8 +253,6 @@ int main() {
     bool insertPressed = false;
     static uintptr_t g_BoneOff = 0x810;
     static uintptr_t g_LifeOff = 0xCF;
-    static Vector3 g_LastPos[128] = {};
-    static int g_StaleFrames[128] = {};
     static int g_FrameCounter = 0;
 
     while (overlay.IsOpen()) {
@@ -305,12 +299,22 @@ int main() {
                     int entityTeam = entity.GetTeam();
                     Vector3 pos = entity.GetPosition();
 
-                    // cheap filters first
+                    // cheap filters first — the proven pattern from maintained CS
+                    // externals (e.g. IMXNOOBX/cs2-external-esp): HP bound + team bound +
+                    // !pos.zero() + lifeState==0, PLUS m_bDormant. NO position-stale
+                    // heuristic — that was a workaround for not reading dormant, and it
+                    // false-positived on campers while still missing round-end corpses.
+                    //
+                    // m_bDormant is the canonical Source flag for "server stopped updating
+                    // this entity" — it flips on round-end corpses, disconnects, and
+                    // out-of-PVS slots. reading it kills the stale-bones bug at the source.
                     uint8_t lifeState = mem.Read<uint8_t>(entityBase + g_LifeOff);
                     if (lifeState != 0) continue;
                     if (hp <= 0 || hp > 100) continue;
                     if (entityTeam < 2 || entityTeam > 3) continue;
                     if (std::abs(pos.x) < 1.0f && std::abs(pos.y) < 1.0f && std::abs(pos.z) < 1.0f) continue;
+                    uint8_t dormant = mem.Read<uint8_t>(entityBase + Game::Offsets::m_bDormant);
+                    if (dormant != 0) continue;
                     if (!g_Config.espTeam && entityTeam == localTeam) continue;
 
                     int modelIdx = mem.Read<int>(entityBase + 0xCC);
@@ -333,37 +337,13 @@ int main() {
                     int moveType = mem.Read<int>(entityBase + Game::Offsets::m_MoveType);
                     if (moveType < 2 || moveType > 11) continue;
 
-                    // CAMPER-SAFE but corpse-killing stale check. two failure modes to balance:
-                    //   - camper holding an angle must NOT be culled (the old position-only
-                    //     filter killed them)
-                    //   - dead-at-round-end bodies must be culled even when lifeState lags
-                    //     (my previous "never cull if lifeState=0" fix left bones stuck on
-                    //     corpses whose flag hadn't flipped yet)
-                    //
-                    // signal: a real alive player shows SOME motion within ~10s (look angle,
-                    // weapon sway, reposition tick). a corpse is truly frozen. so:
-                    //   - soft (staleFrames, ~3s): re-read lifeState+HP, cull if dead.
-                    //   - hard ceiling (staleHardFrames, ~10s): cull no matter what — catches
-                    //     the lag case where lifeState hasn't flipped but the body is plainly
-                    //     a corpse/AFK. real campers won't hit it.
-                    if (g_LastPos[i].x == pos.x && g_LastPos[i].y == pos.y && g_LastPos[i].z == pos.z) {
-                        g_StaleFrames[i]++;
-                    } else {
-                        g_StaleFrames[i] = 0;
-                        g_LastPos[i] = pos;
-                    }
-                    // soft check: stale past threshold → re-read alive signals, cull if dead
-                    if (g_StaleFrames[i] > g_Config.staleFrames) {
-                        uint8_t lifeNow = mem.Read<uint8_t>(entityBase + g_LifeOff);
-                        int hpNow = mem.Read<int>(entityBase + Game::Offsets::m_iHealth);
-                        if (lifeNow != 0 || hpNow <= 0 || hpNow > 100) continue;
-                        // alive per the fresh read — reset to half so we don't re-check every
-                        // frame (the fresh read is the expensive part). entity keeps drawing.
-                        g_StaleFrames[i] = g_Config.staleFrames / 2;
-                    }
-                    // hard ceiling: motionless this long is a corpse/AFK regardless of what
-                    // lifeState claims. this is the line that kills round-end bones.
-                    if (g_StaleFrames[i] > g_Config.staleHardFrames) continue;
+                    // NOTE: no stale-position filter. maintained CS externals don't use one —
+                    // HP bound + team bound + !pos.zero() + !dormant + lifeState==0 is the
+                    // complete validity signal. the stale counter we carried for several
+                    // commits was a workaround for not reading m_bDormant, and it couldn't
+                    // distinguish campers from corpses (both are position-frozen), so it
+                    // either killed campers or let round-end bones stick depending on tuning.
+                    // dormant catches the actual death/edge cases without that tradeoff.
 
                     // distance-based alpha with configurable fade
                     float dx = pos.x - localPos.x, dy = pos.y - localPos.y, dz = pos.z - localPos.z;
