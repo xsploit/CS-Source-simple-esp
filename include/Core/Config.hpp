@@ -43,6 +43,13 @@ struct Config {
     float chamsCore      = 3.0f;   // bright inner core line thickness
     float chamsJointRad  = 5.0f;   // filled circle radius at major joints
 
+    // head dot sits at bone 14 = the head pivot (base of skull / top of neck),
+    // NOT the visual head center. this lifts the dot in screen space, scaled
+    // by on-screen body height so it tracks at any range. 0.12 = ~12% of body
+    // height above the pivot, roughly to the crown/forehead.
+    float headLift       = 0.12f;
+    float headDotRadius  = 4.0f;
+
     // ---- entity filter tuning ----
     // a player frozen in place for this many frames is treated as stale
     // (disconnected/dead-but-not-flagged) and skipped. at ~60fps overlay rate,

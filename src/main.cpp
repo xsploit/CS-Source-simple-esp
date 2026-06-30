@@ -129,6 +129,11 @@ void RenderMenu() {
             ImGui::SliderFloat("fade distance", &g_Config.maxFadeDist, 500.0f, 6000.0f, "%.0f");
 
             ImGui::Separator();
+            ImGui::TextDisabled("-- head dot --");
+            ImGui::SliderFloat("head lift",     &g_Config.headLift,      0.0f, 0.30f, "%.2f");
+            ImGui::SliderFloat("head dot size",  &g_Config.headDotRadius, 2.0f, 10.0f, "%.1f");
+
+            ImGui::Separator();
             ImGui::TextDisabled("-- chams --");
             ImGui::SliderFloat("chams thickness", &g_Config.chamsThickness, 4.0f, 20.0f, "%.1f");
             ImGui::SliderFloat("chams core",      &g_Config.chamsCore,      1.0f, 8.0f,  "%.1f");
@@ -432,9 +437,17 @@ int main() {
                         }
 
                         if (g_Config.espHeadDot) {
-                            float radius = 4.0f;
-                            drawList->AddCircleFilled({ screenHead.x, screenHead.y }, radius, headColor);
-                            drawList->AddCircle({ screenHead.x, screenHead.y }, radius + 1.0f, ImColor(0, 0, 0, alpha / 2), 0, 1.5f);
+                            // bone 14 is the head PIVOT (base of skull), so the raw dot
+                            // sits on the neck. lift it up by a fraction of the on-screen
+                            // body height to land on the visual head center (forehead/
+                            // crown). body height scales the lift so it tracks at any range.
+                            float bodyH = std::abs(screenFeet.y - screenHead.y);
+                            float lift = bodyH * g_Config.headLift;
+                            float hx = screenHead.x;
+                            float hy = screenHead.y - lift;
+                            float r = g_Config.headDotRadius;
+                            drawList->AddCircleFilled({ hx, hy }, r, headColor);
+                            drawList->AddCircle({ hx, hy }, r + 1.0f, ImColor(0, 0, 0, alpha / 2), 0, 1.5f);
                         }
 
                         if (g_Config.espHpText) {
