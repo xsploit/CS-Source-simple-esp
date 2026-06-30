@@ -1,6 +1,12 @@
 #pragma once
 #include <windows.h>
 
+// netvar offsets below verified against UnknownCheats v93 dumps (Dec 2025 - Jan 2026):
+//   m_MoveType    0x1F4   ne0h UC #393 (MOVETYPE_WALK=2)
+//   dw_ViewMatrix 0x6A1BD0 alanopastel (corrected) + AADDPP #371 + Articulador #395
+//   m_dwBoneMatrix 0x810  Articulador #395 (bone IDs: head=14 neck=12 pelvis=0)
+//   m_vecVelocity 0x434  structural (m_vecOrigin 0x428 + 0xC; 36-byte pack to m_fFlags 0x440)
+// confirmed rendering in-game: skeleton, head dot, names, fade all work.
 namespace Game {
     namespace Offsets {
         // Module Bases (for reference, will be retrieved at runtime)
