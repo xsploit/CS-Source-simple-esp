@@ -1,27 +1,18 @@
-# Build directories
+# build output
 build/
 out/
-bin/
-obj/
 
-# Visual Studio / VS Code
+# build-harness temp files (from automated builds)
+_b.bat
+_marker.txt
+_buildlog.txt
+_verify_build.bat
+_verify_out.txt
+
+# IDE
 .vs/
+.vscode/
 *.user
-*.userosscache
-*.sln
-*.vcxproj
-*.filters
-*.dir/
 
-# Except the ones we want in .vscode
-!.vscode/tasks.json
-!.vscode/launch.json
-!.vscode/c_cpp_properties.json
-
-# Logs and temp
-*.log
-templogs.txt
-
-# OS files
-.DS_Store
-Thumbs.db
+# generated config (user-specific — keep template, drop local)
+config.json

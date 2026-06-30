@@ -9,6 +9,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(PROJECT_SOURCES
     "src/main.cpp"
     "src/Core/Memory.cpp"
+    "src/Core/Config.cpp"
     "src/Game/Entity.cpp"
     "src/Overlay/Overlay.cpp"
     
