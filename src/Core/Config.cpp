@@ -55,6 +55,7 @@ void Config::Save() const {
     f << "  \"espSkeleton\": "       << (espSkeleton ? "true" : "false")       << ",\n";
     f << "  \"espName\": "           << (espName ? "true" : "false")           << ",\n";
     f << "  \"espHpText\": "         << (espHpText ? "true" : "false")         << ",\n";
+    f << "  \"espDistance\": "       << (espDistance ? "true" : "false")       << ",\n";
     f << "  \"bhopEnabled\": "       << (bhopEnabled ? "true" : "false")       << ",\n";
     f << "  \"menuOpen\": "          << (menuOpen ? "true" : "false")          << ",\n";
     f << "  \"boxStyle\": "          << boxStyle                              << ",\n";
@@ -110,6 +111,7 @@ void Config::Load() {
             else if (key == "espSkeleton")       espSkeleton = b;
             else if (key == "espName")           espName = b;
             else if (key == "espHpText")         espHpText = b;
+            else if (key == "espDistance")       espDistance = b;
             else if (key == "bhopEnabled")       bhopEnabled = b;
             else if (key == "menuOpen")          menuOpen = b;
             else if (key == "distanceInMetres")  distanceInMetres = b;

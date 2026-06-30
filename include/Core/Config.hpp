@@ -28,6 +28,7 @@ struct Config {
     bool espChams     = false;     // bone-glow chams (thick glowing body shape)
     bool espName      = false;
     bool espHpText    = true;
+    bool espDistance  = true;
     bool bhopEnabled  = false;     // walls-only build: off + writes disabled
     bool menuOpen     = true;
 

@@ -107,8 +107,10 @@ void RenderMenu() {
                 ImGui::Checkbox("Health Bar",  &g_Config.espHealth);
                 ImGui::Checkbox("Snaplines",   &g_Config.espSnaplines);
                 ImGui::Checkbox("Skeleton",    &g_Config.espSkeleton);
+                ImGui::Checkbox("Chams",       &g_Config.espChams);
                 ImGui::Checkbox("Name",        &g_Config.espName);
                 ImGui::Checkbox("HP Text",     &g_Config.espHpText);
+                ImGui::Checkbox("Distance",    &g_Config.espDistance);
                 ImGui::Checkbox("Show Teammates", &g_Config.espTeam);
             }
             ImGui::EndTabItem();
@@ -194,7 +196,17 @@ int main() {
     std::cout << "[!] Educational ESP - CS:S v93" << std::endl;
     std::cout << "[!] Make sure to run this program AS ADMINISTRATOR!" << std::endl;
 
-    // load config first — path defaults to config.json next to cwd
+    // load config first — resolve path next to the EXE, not CWD. CWD varies
+    // (Explorer vs shell vs shortcut) so a relative "config.json" lands in
+    // unpredictable places; the EXE folder is stable.
+    {
+        char exePath[MAX_PATH] = {};
+        if (GetModuleFileNameA(nullptr, exePath, MAX_PATH)) {
+            std::string ep(exePath);
+            size_t slash = ep.find_last_of("\\/");
+            if (slash != std::string::npos) g_Config.path = ep.substr(0, slash + 1) + "config.json";
+        }
+    }
     g_Config.Load();
 
     std::cout << "[*] Searching for process: cstrike_win64.exe..." << std::endl;
@@ -267,11 +279,9 @@ int main() {
         if (localPlayerBase) {
             Game::Entity localPlayer(localPlayerBase, mem);
 
-            // bhop: reads only — writes disabled for the walls-only build
-            if (g_Config.bhopEnabled && (GetAsyncKeyState(VK_SPACE) & 0x8000)) {
-                int flags = mem.Read<int>(localPlayerBase + Game::Offsets::m_fFlags);
-                (void)flags; // was: if (flags & 1) mem.Write(...ForceJump, 5)
-            }
+            // bhop: writes disabled for the walls-only build. the toggle is
+            // kept (Config tab) for future enable, but the read-flags-then-discard
+            // dead block was removed — it was misleading (looked alive, did nothing).
 
             if (g_Config.espEnabled) {
                 Matrix4x4 viewMatrix = mem.Read<Matrix4x4>(engineBase + Game::Offsets::dw_ViewMatrix);
@@ -299,12 +309,15 @@ int main() {
                     int modelIdx = mem.Read<int>(entityBase + 0xCC);
                     if (modelIdx <= 0) continue;
 
+                    // cache the name during the filter pass — the render pass below
+                    // used to re-read it (32 bytes) after this 3-byte probe, doubling RPMs
+                    // per entity per frame. stash it now, draw from the cache.
+                    char cachedName[32] = {};
                     bool hasName = false;
                     if (nameListBase && nameListBase >= 0x10000) {
                         uintptr_t np = mem.Read<uintptr_t>(nameListBase + 0x798 + (i * 0x4));
                         if (np && np >= 0x10000) {
-                            char nb[4] = {};
-                            if (ReadProcessMemory(mem.GetHandle(), (LPCVOID)np, nb, 3, nullptr) && nb[0])
+                            if (ReadProcessMemory(mem.GetHandle(), (LPCVOID)np, cachedName, sizeof(cachedName) - 1, nullptr) && cachedName[0])
                                 hasName = true;
                         }
                     }
@@ -430,22 +443,19 @@ int main() {
                             drawList->AddText({ screenHead.x - 8.0f, screenHead.y - 14.0f }, hpColor, buf);
                         }
 
-                        if (g_Config.espName && hasName && nameListBase && nameListBase >= 0x10000) {
-                            uintptr_t namePtr = mem.Read<uintptr_t>(nameListBase + 0x798 + (i * 0x4));
-                            if (namePtr && namePtr >= 0x10000) {
-                                char nameBuf[32] = {};
-                                if (ReadProcessMemory(mem.GetHandle(), (LPCVOID)namePtr, nameBuf, sizeof(nameBuf) - 1, nullptr) && nameBuf[0]) {
-                                    drawList->AddText({ screenHead.x - 30.0f, screenHead.y - 26.0f }, nameColor, nameBuf);
-                                }
-                            }
+                        // name ESP — draw from the cache populated during the filter pass
+                        if (g_Config.espName && hasName) {
+                            drawList->AddText({ screenHead.x - 30.0f, screenHead.y - 26.0f }, nameColor, cachedName);
                         }
 
-                        // distance text under feet
-                        float dDisp = g_Config.distanceInMetres ? dist / 39.37f : dist;
-                        const char* unit = g_Config.distanceInMetres ? "m" : "u";
-                        char dbuf[24];
-                        snprintf(dbuf, sizeof(dbuf), "%d%s", (int)dDisp, unit);
-                        drawList->AddText({ screenHead.x - 12.0f, screenFeet.y + 2.0f }, nameColor, dbuf);
+                        // distance text — gated by its own toggle so it's not always-on
+                        if (g_Config.espDistance) {
+                            float dDisp = g_Config.distanceInMetres ? dist / 39.37f : dist;
+                            const char* unit = g_Config.distanceInMetres ? "m" : "u";
+                            char dbuf[24];
+                            snprintf(dbuf, sizeof(dbuf), "%d%s", (int)dDisp, unit);
+                            drawList->AddText({ screenHead.x - 12.0f, screenFeet.y + 2.0f }, nameColor, dbuf);
+                        }
 
                         float height = std::abs(screenFeet.y - screenHead.y);
                         float width = height / 2.1f;

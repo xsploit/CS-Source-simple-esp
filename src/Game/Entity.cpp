@@ -17,7 +17,7 @@ namespace Game {
         uintptr_t weaponHandle = m_Mem.Read<uintptr_t>(m_Base + Offsets::m_hActiveWeapon);
         uintptr_t weaponIndex = weaponHandle & 0xFFF;
         
-        // Use the same stride (0x20) as the player list
+        // entity list stride is 0x10 (v93 x64) — matches the player loop
         uintptr_t weaponBase = m_Mem.Read<uintptr_t>(clientBase + Offsets::dw_BaseEntity + (weaponIndex * 0x10));
         if (!weaponBase) return -1;
 

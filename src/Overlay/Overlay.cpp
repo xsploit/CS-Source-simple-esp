@@ -29,8 +29,12 @@ namespace Overlay {
         m_Hwnd = CreateWindowExW(WS_EX_TOPMOST | WS_EX_TRANSPARENT | WS_EX_LAYERED, L"OverlayClass", L"Overlay", WS_POPUP, windowPos.x, windowPos.y, m_Width, m_Height, NULL, NULL, wc.hInstance, NULL);
 
         SetLayeredWindowAttributes(m_Hwnd, RGB(0, 0, 0), BYTE(255), LWA_ALPHA);
-        DWM_BLURBEHIND bb = { DWM_BB_ENABLE | DWM_BB_BLURREGION, TRUE, CreateRectRgn(0, 0, -1, -1), FALSE };
+        // the blur region must be freed after DwmEnableBlurBehindWindow takes
+        // a copy — the original code leaked an HRGN every Create() call.
+        HRGN blurRgn = CreateRectRgn(0, 0, -1, -1);
+        DWM_BLURBEHIND bb = { DWM_BB_ENABLE | DWM_BB_BLURREGION, TRUE, blurRgn, FALSE };
         DwmEnableBlurBehindWindow(m_Hwnd, &bb);
+        DeleteObject(blurRgn);
 
         if (!InitD3D()) return false;
 
@@ -114,10 +118,13 @@ namespace Overlay {
     }
 
     void Window::ToggleInput(bool enable) {
+        // SetWindowLongPtr is the x64-correct API (SetWindowLong truncates the
+        // LONG_PTR on 64-bit). harmless here because GWL_EXSTYLE fits in 32 bits,
+        // but correctness is free.
         if (enable) {
-            SetWindowLong(m_Hwnd, GWL_EXSTYLE, WS_EX_LAYERED | WS_EX_TOPMOST);
+            SetWindowLongPtr(m_Hwnd, GWL_EXSTYLE, WS_EX_LAYERED | WS_EX_TOPMOST);
         } else {
-            SetWindowLong(m_Hwnd, GWL_EXSTYLE, WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOPMOST);
+            SetWindowLongPtr(m_Hwnd, GWL_EXSTYLE, WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOPMOST);
         }
     }
 
