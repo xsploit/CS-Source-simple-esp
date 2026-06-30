@@ -143,6 +143,8 @@ void RenderMenu() {
             ImGui::TextDisabled("-- filter --");
             ImGui::SliderInt("stale timeout (frames)", &g_Config.staleFrames, 30, 600);
             ImGui::SameLine(); ImGui::TextDisabled("(~%.0fs)", g_Config.staleFrames / 60.0f);
+            ImGui::SliderInt("stale hard limit (frames)", &g_Config.staleHardFrames, 300, 1800);
+            ImGui::SameLine(); ImGui::TextDisabled("(~%.0fs)", g_Config.staleHardFrames / 60.0f);
 
             ImGui::Separator();
             ImGui::TextDisabled("-- colors (click swatch) --");
@@ -331,34 +333,37 @@ int main() {
                     int moveType = mem.Read<int>(entityBase + Game::Offsets::m_MoveType);
                     if (moveType < 2 || moveType > 11) continue;
 
-                    // CAMPER-SAFE stale check LAST. the old logic culled ANY entity that
-                    // hadn't moved in N frames — which nuked campers holding an angle, since
-                    // a live player holding still looks identical to a dead-but-not-flagged
-                    // body if you only watch position.
+                    // CAMPER-SAFE but corpse-killing stale check. two failure modes to balance:
+                    //   - camper holding an angle must NOT be culled (the old position-only
+                    //     filter killed them)
+                    //   - dead-at-round-end bodies must be culled even when lifeState lags
+                    //     (my previous "never cull if lifeState=0" fix left bones stuck on
+                    //     corpses whose flag hadn't flipped yet)
                     //
-                    // the real alive signal is lifeState (0=alive) + HP>0, both of which we
-                    // already validated above. so a fully-valid live entity is NEVER culled
-                    // for being still. the stale-position check now only catches the rare
-                    // ambiguous slot (lifeState reads alive but the entity has fallen out of
-                    // the server's update stream — disconnected/dead-but-not-flagged), which
-                    // shows up as position-frozen AND a zero/unchanged HP. genuine campers
-                    // keep rendering forever.
+                    // signal: a real alive player shows SOME motion within ~10s (look angle,
+                    // weapon sway, reposition tick). a corpse is truly frozen. so:
+                    //   - soft (staleFrames, ~3s): re-read lifeState+HP, cull if dead.
+                    //   - hard ceiling (staleHardFrames, ~10s): cull no matter what — catches
+                    //     the lag case where lifeState hasn't flipped but the body is plainly
+                    //     a corpse/AFK. real campers won't hit it.
                     if (g_LastPos[i].x == pos.x && g_LastPos[i].y == pos.y && g_LastPos[i].z == pos.z) {
                         g_StaleFrames[i]++;
                     } else {
                         g_StaleFrames[i] = 0;
                         g_LastPos[i] = pos;
                     }
-                    // only cull on stale if a fresh read ALSO says dead — never cull a
-                    // confirmed-alive camper.
+                    // soft check: stale past threshold → re-read alive signals, cull if dead
                     if (g_StaleFrames[i] > g_Config.staleFrames) {
                         uint8_t lifeNow = mem.Read<uint8_t>(entityBase + g_LifeOff);
                         int hpNow = mem.Read<int>(entityBase + Game::Offsets::m_iHealth);
                         if (lifeNow != 0 || hpNow <= 0 || hpNow > 100) continue;
-                        // alive but frozen — reset the counter so we don't re-check every
+                        // alive per the fresh read — reset to half so we don't re-check every
                         // frame (the fresh read is the expensive part). entity keeps drawing.
                         g_StaleFrames[i] = g_Config.staleFrames / 2;
                     }
+                    // hard ceiling: motionless this long is a corpse/AFK regardless of what
+                    // lifeState claims. this is the line that kills round-end bones.
+                    if (g_StaleFrames[i] > g_Config.staleHardFrames) continue;
 
                     // distance-based alpha with configurable fade
                     float dx = pos.x - localPos.x, dy = pos.y - localPos.y, dz = pos.z - localPos.z;

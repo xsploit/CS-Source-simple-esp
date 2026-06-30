@@ -55,6 +55,8 @@ struct Config {
     // (disconnected/dead-but-not-flagged) and skipped. at ~60fps overlay rate,
     // 180 frames = 3 seconds — long enough that real campers don't vanish.
     int   staleFrames    = 180;
+    int   staleHardFrames = 600;  // hard ceiling (~10s @ 60fps) — culls corpses whose
+                                  // lifeState lags at round end. real campers won't hit it.
 
     // ---- colors (float 0..1, alpha included) ----
     ImVec4 colEnemy     = ImVec4(1.00f, 0.00f, 0.00f, 1.0f); // red

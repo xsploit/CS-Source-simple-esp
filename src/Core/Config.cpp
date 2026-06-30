@@ -68,6 +68,7 @@ void Config::Save() const {
     f << "  \"headLift\": "          << headLift                              << ",\n";
     f << "  \"headDotRadius\": "     << headDotRadius                         << ",\n";
     f << "  \"staleFrames\": "       << staleFrames                           << ",\n";
+    f << "  \"staleHardFrames\": "   << staleHardFrames                       << ",\n";
     f << "  \"colEnemy\": "          << VecToJson(colEnemy)                   << ",\n";
     f << "  \"colTeam\": "           << VecToJson(colTeam)                    << ",\n";
     f << "  \"colSkeleton\": "       << VecToJson(colSkeleton)                << ",\n";
@@ -144,6 +145,7 @@ void Config::Load() {
         else if (key == "headLift")       headLift       = (float)atof(val.c_str());
         else if (key == "headDotRadius")  headDotRadius  = (float)atof(val.c_str());
         else if (key == "staleFrames")    staleFrames    = atoi(val.c_str());
+        else if (key == "staleHardFrames") staleHardFrames = atoi(val.c_str());
     }
 }
 
