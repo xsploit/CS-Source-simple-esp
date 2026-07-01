@@ -301,15 +301,6 @@ int main() {
                 int screenW = overlay.GetWidth();
                 int screenH = overlay.GetHeight();
 
-                // SELF-CALIBRATING DORMANT (pattern stolen from arukenimon/CS-Source-Internal):
-                // instead of assuming dormant==0 means "active" (a magic value that could
-                // change between builds), read the LOCAL player's dormant byte as the
-                // known-good reference (you are always non-dormant to yourself) and
-                // compare each entity to it. any entity whose dormant differs from yours
-                // is in a different update state = round-end corpse / disconnected /
-                // out-of-PVS. self-calibrates; no magic number to maintain.
-                uint8_t myDormant = mem.Read<uint8_t>(localPlayerBase + Game::Offsets::m_bDormant);
-
                 // ---- NO-FLICKER ARCHITECTURE (per swedz / maintained CS externals) ----
                 // decouple READ from DRAW. the old loop interleaved ReadProcessMemory
                 // with ImGui draw calls on the overlay thread — any RPM stall
@@ -350,8 +341,14 @@ int main() {
                     if (hp <= 0 || hp > 100) continue;
                     if (entityTeam < 2 || entityTeam > 3) continue;
                     if (std::abs(pos.x) < 1.0f && std::abs(pos.y) < 1.0f && std::abs(pos.z) < 1.0f) continue;
+                    // m_bDormant ABSOLUTE cull: dormant==1 means the server stopped
+                    // updating this entity (round-end corpse, disconnected, out-of-PVS).
+                    // the self-calibration trick (compare vs local player) I ported from
+                    // arukenimon was WRONG for us: in spectate YOU are dormant too, so
+                    // dead bodies matched your value and passed — stale ESP in spectate.
+                    // dormant is an absolute state, not relative to the viewer.
                     uint8_t dormant = mem.Read<uint8_t>(entityBase + Game::Offsets::m_bDormant);
-                    if (dormant != myDormant) continue;  // self-calibrated vs local player
+                    if (dormant != 0) continue;
                     if (!g_Config.espTeam && entityTeam == localTeam) continue;
 
                     int modelIdx = mem.Read<int>(entityBase + 0xCC);
