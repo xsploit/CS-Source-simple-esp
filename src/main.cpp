@@ -136,10 +136,24 @@ void RenderMenu() {
             ImGui::SliderFloat("head dot size",  &g_Config.headDotRadius, 2.0f, 10.0f, "%.1f");
 
             ImGui::Separator();
+            ImGui::TextDisabled("-- transparency --");
+            ImGui::SliderFloat("skeleton alpha", &g_Config.alphaSkeleton, 0.05f, 1.0f, "%.2f");
+            ImGui::SliderFloat("chams alpha",    &g_Config.alphaChams,    0.05f, 1.0f, "%.2f");
+
+            ImGui::Separator();
             ImGui::TextDisabled("-- chams --");
             ImGui::SliderFloat("chams thickness", &g_Config.chamsThickness, 4.0f, 20.0f, "%.1f");
             ImGui::SliderFloat("chams core",      &g_Config.chamsCore,      1.0f, 8.0f,  "%.1f");
             ImGui::SliderFloat("chams joint",     &g_Config.chamsJointRad,  2.0f, 12.0f, "%.1f");
+
+            ImGui::Separator();
+            ImGui::TextDisabled("-- anti-recoil --");
+            const char* modes[] = { "Pixel (SAD)", "Fixed (pull)" };
+            ImGui::Combo("mode", &g_Config.recoilMode, modes, 2);
+            ImGui::SliderFloat("sensitivity", &g_Config.recoilSensitivity, 0.1f, 2.0f, "%.2f");
+            ImGui::SliderInt("max down/frame", &g_Config.recoilMaxComp, 1, 20);
+            ImGui::SliderInt("fixed rate",     &g_Config.recoilFixedRate, 1, 10);
+            ImGui::TextDisabled("live: +/- sensitivity, PgUp/PgDn max-down");
 
             ImGui::Separator();
             ImGui::TextDisabled("-- filter (pos+HP stale) --");
@@ -299,8 +313,31 @@ int main() {
         RenderMenu();
         g_FrameCounter++;
 
-        // anti-recoil — call every frame (cheap, ~0.3ms)
-        if (g_Config.recoilEnabled) recoil.Update();
+        // anti-recoil — sync config from g_Config every frame (so the +/- and
+        // PgUp/PgDn keybinds + menu sliders take effect live), then update.
+        if (g_Config.recoilEnabled) {
+            arCfg.sensitivity      = g_Config.recoilSensitivity;
+            arCfg.max_compensation = g_Config.recoilMaxComp;
+            arCfg.fixed_rate       = g_Config.recoilFixedRate;
+            arCfg.mode             = (g_Config.recoilMode == 1) ? ar::Mode::FIXED : ar::Mode::PIXEL;
+            recoil.SetConfig(arCfg);
+            recoil.Update();
+        }
+
+        // live keybinds: +/- adjusts pixel speed, PgUp/PgDn adjusts max-down.
+        // edge-triggered so one tap = one step, not a runaway.
+        {
+            static bool prevPlus = false, prevMinus = false, prevPgUp = false, prevPgDn = false;
+            bool curPlus  = (GetAsyncKeyState(VK_OEM_PLUS)  & 0x8000) != 0;
+            bool curMinus = (GetAsyncKeyState(VK_OEM_MINUS) & 0x8000) != 0;
+            bool curPgUp  = (GetAsyncKeyState(VK_PRIOR)    & 0x8000) != 0; // PgUp
+            bool curPgDn  = (GetAsyncKeyState(VK_NEXT)     & 0x8000) != 0; // PgDn
+            if (curPlus  && !prevPlus)  { g_Config.recoilSensitivity = (std::min)(2.0f, g_Config.recoilSensitivity + 0.05f); }
+            if (curMinus && !prevMinus) { g_Config.recoilSensitivity = (std::max)(0.1f, g_Config.recoilSensitivity - 0.05f); }
+            if (curPgUp  && !prevPgUp)  { g_Config.recoilMaxComp = (std::max)(1, g_Config.recoilMaxComp - 1); }   // less pull
+            if (curPgDn  && !prevPgDn)  { g_Config.recoilMaxComp = (std::min)(20, g_Config.recoilMaxComp + 1); }  // more pull
+            prevPlus = curPlus; prevMinus = curMinus; prevPgUp = curPgUp; prevPgDn = curPgDn;
+        }
 
         bool f3Pressed = (GetAsyncKeyState(VK_F3) & 0x8000);
 
@@ -469,7 +506,7 @@ int main() {
                     ImU32 baseColor = Core::ColorFor(g_Config, rec.isMate, alpha);
                     ImU32 skelColor = ImGui::ColorConvertFloat4ToU32(
                         ImVec4(g_Config.colSkeleton.x, g_Config.colSkeleton.y, g_Config.colSkeleton.z,
-                               (g_Config.colSkeleton.w * alpha) / 255.0f));
+                               (g_Config.colSkeleton.w * g_Config.alphaSkeleton * alpha) / 255.0f));
                     ImU32 headColor = ImGui::ColorConvertFloat4ToU32(
                         ImVec4(g_Config.colHeadDot.x, g_Config.colHeadDot.y, g_Config.colHeadDot.z,
                                (g_Config.colHeadDot.w * alpha) / 255.0f));
@@ -499,12 +536,17 @@ int main() {
                         }
                         if (g_Config.espChams) {
                             ImVec4 base = rec.isMate ? g_Config.colTeam : g_Config.colEnemy;
+                            // apply the chams alpha multiplier on top of the fade alpha
+                            base.w *= g_Config.alphaChams;
                             ImVec4 corev((std::min)(1.0f, base.x + 0.5f),
                                          (std::min)(1.0f, base.y + 0.5f),
                                          (std::min)(1.0f, base.z + 0.5f),
                                          (base.w * alpha) / 255.0f);
                             ImU32 coreColor = ImGui::ColorConvertFloat4ToU32(corev);
-                            DrawChams(drawList, rec.bonesScreen, rec.boneValid, baseColor, coreColor,
+                            // chams tube color: same base hue, alpha scaled by the chams multiplier
+                            ImU32 chamsBase = ImGui::ColorConvertFloat4ToU32(
+                                ImVec4(base.x, base.y, base.z, (base.w * alpha) / 255.0f));
+                            DrawChams(drawList, rec.bonesScreen, rec.boneValid, chamsBase, coreColor,
                                       g_Config.chamsThickness, g_Config.chamsCore, g_Config.chamsJointRad);
                         }
                     }

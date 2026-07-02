@@ -58,6 +58,12 @@ void Config::Save() const {
     f << "  \"espDistance\": "       << (espDistance ? "true" : "false")       << ",\n";
     f << "  \"bhopEnabled\": "       << (bhopEnabled ? "true" : "false")       << ",\n";
     f << "  \"recoilEnabled\": "    << (recoilEnabled ? "true" : "false")    << ",\n";
+    f << "  \"recoilSensitivity\": "<< recoilSensitivity                      << ",\n";
+    f << "  \"recoilMaxComp\": "     << recoilMaxComp                         << ",\n";
+    f << "  \"recoilFixedRate\": "   << recoilFixedRate                       << ",\n";
+    f << "  \"recoilMode\": "         << recoilMode                            << ",\n";
+    f << "  \"alphaSkeleton\": "     << alphaSkeleton                        << ",\n";
+    f << "  \"alphaChams\": "        << alphaChams                           << ",\n";
     f << "  \"menuOpen\": "          << (menuOpen ? "true" : "false")          << ",\n";
     f << "  \"boxStyle\": "          << boxStyle                              << ",\n";
     f << "  \"boxThickness\": "      << boxThickness                          << ",\n";
@@ -148,6 +154,12 @@ void Config::Load() {
         else if (key == "headDotRadius")  headDotRadius  = (float)atof(val.c_str());
         else if (key == "staleFrames")    staleFrames    = atoi(val.c_str());
         else if (key == "staleHardFrames") staleHardFrames = atoi(val.c_str());
+        else if (key == "recoilSensitivity") recoilSensitivity = (float)atof(val.c_str());
+        else if (key == "recoilMaxComp")     recoilMaxComp     = atoi(val.c_str());
+        else if (key == "recoilFixedRate")   recoilFixedRate   = atoi(val.c_str());
+        else if (key == "recoilMode")         recoilMode        = atoi(val.c_str());
+        else if (key == "alphaSkeleton")     alphaSkeleton     = (float)atof(val.c_str());
+        else if (key == "alphaChams")        alphaChams        = (float)atof(val.c_str());
     }
 }
 

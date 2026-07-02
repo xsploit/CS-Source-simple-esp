@@ -33,6 +33,12 @@ struct Config {
     bool recoilEnabled = false;    // pixel-based anti-recoil
     bool menuOpen     = true;
 
+    // ---- anti-recoil tuning (live-adjustable via +/- and PgUp/PgDn) ----
+    float recoilSensitivity = 1.0f; // overall compensation scale (PIXEL mode)
+    int   recoilMaxComp     = 8;    // per-frame downward cap (px) — adjusted by PgUp/PgDn
+    int   recoilFixedRate   = 3;    // px/frame in FIXED mode
+    int   recoilMode        = 0;    // 0=PIXEL, 1=FIXED
+
     // ---- rendering options ----
     int  boxStyle      = 0;        // 0=outline, 1=filled, 2=corner
     float boxThickness = 1.5f;
@@ -60,6 +66,11 @@ struct Config {
                                   // lifeState lags at round end. real campers won't hit it.
 
     // ---- colors (float 0..1, alpha included) ----
+    // the ColorEdit4 pickers already expose alpha, but these explicit alpha
+    // multipliers give a separate slider so you can fade the whole element
+    // without re-picking the color. final alpha = color.w * elementAlpha.
+    float alphaSkeleton = 1.0f;  // bones multiplier (0..1)
+    float alphaChams    = 1.0f;  // chams glow tubes multiplier (0..1)
     ImVec4 colEnemy     = ImVec4(1.00f, 0.00f, 0.00f, 1.0f); // red
     ImVec4 colTeam      = ImVec4(0.00f, 1.00f, 0.00f, 1.0f); // green
     ImVec4 colSkeleton  = ImVec4(1.00f, 1.00f, 1.00f, 0.85f);
