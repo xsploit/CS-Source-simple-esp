@@ -57,6 +57,7 @@ void Config::Save() const {
     f << "  \"espHpText\": "         << (espHpText ? "true" : "false")         << ",\n";
     f << "  \"espDistance\": "       << (espDistance ? "true" : "false")       << ",\n";
     f << "  \"bhopEnabled\": "       << (bhopEnabled ? "true" : "false")       << ",\n";
+    f << "  \"recoilEnabled\": "    << (recoilEnabled ? "true" : "false")    << ",\n";
     f << "  \"menuOpen\": "          << (menuOpen ? "true" : "false")          << ",\n";
     f << "  \"boxStyle\": "          << boxStyle                              << ",\n";
     f << "  \"boxThickness\": "      << boxThickness                          << ",\n";
@@ -116,6 +117,7 @@ void Config::Load() {
             else if (key == "espHpText")         espHpText = b;
             else if (key == "espDistance")       espDistance = b;
             else if (key == "bhopEnabled")       bhopEnabled = b;
+            else if (key == "recoilEnabled")    recoilEnabled = b;
             else if (key == "menuOpen")          menuOpen = b;
             else if (key == "distanceInMetres")  distanceInMetres = b;
             continue;

@@ -12,6 +12,7 @@ set(PROJECT_SOURCES
     "src/Core/Config.cpp"
     "src/Game/Entity.cpp"
     "src/Overlay/Overlay.cpp"
+    "src/Utils/anti_recoil.cpp"
     
     "imgui/imgui.cpp"
     "imgui/imgui_draw.cpp"

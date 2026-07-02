@@ -3,6 +3,7 @@
 #include "../include/Game/Entity.hpp"
 #include "../include/Overlay/Overlay.hpp"
 #include "../include/Utils/Math.hpp"
+#include "../include/Utils/anti_recoil.h"
 #include <cstdint>
 #include <cmath>
 #include <cstring>
@@ -141,7 +142,9 @@ void RenderMenu() {
             ImGui::SliderFloat("chams joint",     &g_Config.chamsJointRad,  2.0f, 12.0f, "%.1f");
 
             ImGui::Separator();
-            ImGui::TextDisabled("-- filter (pos-stale + round-reset) --");
+            ImGui::TextDisabled("-- filter (pos+HP stale) --");
+            ImGui::SliderInt("stale timeout (frames)", &g_Config.staleFrames, 30, 600);
+            ImGui::SameLine(); ImGui::TextDisabled("(~%.0fs)", g_Config.staleFrames / 60.0f);
 
             ImGui::Separator();
             ImGui::TextDisabled("-- colors (click swatch) --");
@@ -166,6 +169,7 @@ void RenderMenu() {
 
             ImGui::Separator();
             ImGui::Checkbox("BunnyHop (writes disabled — walls-only)", &g_Config.bhopEnabled);
+            ImGui::Checkbox("Anti-Recoil (pixel-based)", &g_Config.recoilEnabled);
 
             ImGui::EndTabItem();
         }
@@ -213,6 +217,11 @@ int main() {
     }
     g_Config.Load();
 
+    // anti-recoil: pixel-based, no RPM — BitBlt crosshair strip + mouse pull
+    ar::Config arCfg;
+    arCfg.game_hwnd = nullptr; // set after we find the game window
+    ar::AntiRecoil recoil(arCfg);
+
     std::cout << "[*] Searching for process: cstrike_win64.exe..." << std::endl;
     DWORD targetPid = 0;
     while (true) {
@@ -251,9 +260,16 @@ int main() {
     }
     std::cout << "[+] Overlay created!" << std::endl;
 
+    // wire anti-recoil to the game window
+    arCfg.game_hwnd = (void*)gameHwnd;
+    recoil.SetConfig(arCfg);
+
     bool insertPressed = false;
     static uintptr_t g_BoneOff = 0x810;
     static uintptr_t g_LifeOff = 0xCF;
+    static Vector3 g_LastPos[128] = {};
+    static int g_StaleFrames[128] = {};
+    static int g_LastHp[128] = {};
     static int g_FrameCounter = 0;
 
     while (overlay.IsOpen()) {
@@ -262,10 +278,17 @@ int main() {
         if (GetAsyncKeyState(VK_INSERT) & 0x8000) {
             if (!insertPressed) {
                 g_Config.menuOpen = !g_Config.menuOpen;
-                overlay.ToggleInput(g_Config.menuOpen);
                 insertPressed = true;
             }
         } else insertPressed = false;
+
+        // sync overlay input capture with the ACTUAL menuOpen state every frame.
+        // the old code only toggled on the INSERT keypress edge, so if menuOpen
+        // flipped any other way (clicking the ImGui X, config load, END) the
+        // overlay's WS_EX_TRANSPARENT flag went stale — cursor stuck or clicks
+        // passing through to the game while the menu was up. cheap (a
+        // SetWindowLongPtr) and correct regardless of how menuOpen changed.
+        overlay.ToggleInput(g_Config.menuOpen);
 
         if (GetAsyncKeyState(VK_END) & 0x8000) {
             g_Config.Save();        // autosave on exit
@@ -275,23 +298,21 @@ int main() {
         overlay.UpdatePosition(gameHwnd);
         RenderMenu();
         g_FrameCounter++;
+
+        // anti-recoil — call every frame (cheap, ~0.3ms)
+        if (g_Config.recoilEnabled) recoil.Update();
+
         bool f3Pressed = (GetAsyncKeyState(VK_F3) & 0x8000);
 
         uintptr_t localPlayerBase = mem.Read<uintptr_t>(clientBase + Game::Offsets::dwLocalPlayer);
         if (localPlayerBase) {
             Game::Entity localPlayer(localPlayerBase, mem);
 
-            // Round-reset: clear stale tracking when we respawn
-            static bool wasDead = true;
+            // skip ESP entirely while dead — sidesteps the whole spectate-target
+            // problem and corpse-cleanup problem without needing dormant or stale
+            // heuristics. when we respawn, ESP resumes with a clean slate.
             uint8_t myLife = mem.Read<uint8_t>(localPlayerBase + g_LifeOff);
-            int myHp = mem.Read<int>(localPlayerBase + Game::Offsets::m_iHealth);
-            bool amAlive = (myLife == 0 && myHp > 0);
-            (void)amAlive; (void)wasDead; // round-transition tracking removed with the stale filter
-            wasDead = !amAlive;
-
-            // bhop: writes disabled for the walls-only build. the toggle is
-            // kept (Config tab) for future enable, but the read-flags-then-discard
-            // dead block was removed — it was misleading (looked alive, did nothing).
+            if (myLife != 0) goto skipEsp;
 
             if (g_Config.espEnabled) {
                 Matrix4x4 viewMatrix = mem.Read<Matrix4x4>(engineBase + Game::Offsets::dw_ViewMatrix);
@@ -314,6 +335,7 @@ int main() {
                 //   so no stall can split a frame. a frame is either fully drawn or not.
                 struct RenderRecord {
                     int hp; int entityTeam; bool isMate; int alpha;
+                    float dist;
                     Vector3 screenFeet, screenHead;
                     Vector3 bonesScreen[32]; bool boneValid[32]; bool hasBones;
                     char name[32]; bool hasName;
@@ -333,22 +355,19 @@ int main() {
                     int entityTeam = entity.GetTeam();
                     Vector3 pos = entity.GetPosition();
 
-                    // ground-truth filters — no stale heuristic. maintained CS externals
-                    // (IMXNOOBX/cs2-external-esp) use HP bound + team bound + !pos.zero()
-                    // + lifeState==0. we add m_bDormant (0x214) for round-end corpses.
+                    // DORMANT (float compare): read as float vs local player.
+                    // if they differ → entity dormant (server stopped updating).
+                    // x86=0x60; x64 ~0x80-0xA0 — we'll scan to find working offset.
+                    static uintptr_t g_DormantOff = 0x8C;
+                    float myDormant = mem.Read<float>(localPlayerBase + g_DormantOff);
+                    float entDormant = mem.Read<float>(entityBase + g_DormantOff);
+                    if (entDormant != myDormant) continue;
+
                     uint8_t lifeState = mem.Read<uint8_t>(entityBase + g_LifeOff);
                     if (lifeState != 0) continue;
                     if (hp <= 0 || hp > 100) continue;
                     if (entityTeam < 2 || entityTeam > 3) continue;
                     if (std::abs(pos.x) < 1.0f && std::abs(pos.y) < 1.0f && std::abs(pos.z) < 1.0f) continue;
-                    // m_bDormant ABSOLUTE cull: dormant==1 means the server stopped
-                    // updating this entity (round-end corpse, disconnected, out-of-PVS).
-                    // the self-calibration trick (compare vs local player) I ported from
-                    // arukenimon was WRONG for us: in spectate YOU are dormant too, so
-                    // dead bodies matched your value and passed — stale ESP in spectate.
-                    // dormant is an absolute state, not relative to the viewer.
-                    uint8_t dormant = mem.Read<uint8_t>(entityBase + Game::Offsets::m_bDormant);
-                    if (dormant != 0) continue;
                     if (!g_Config.espTeam && entityTeam == localTeam) continue;
 
                     int modelIdx = mem.Read<int>(entityBase + 0xCC);
@@ -369,12 +388,29 @@ int main() {
                     }
                     if (!rec.hasName) continue;
 
+                    // position-stale + HP-stale: entity frozen AND HP unchanged
+                    // for too long = dead/disconnected. dual-signal avoids false
+                    // positives on campers (their HP changes on hit).
+                    bool posSame = (std::abs(g_LastPos[i].x - pos.x) < 0.1f &&
+                                    std::abs(g_LastPos[i].y - pos.y) < 0.1f &&
+                                    std::abs(g_LastPos[i].z - pos.z) < 0.1f);
+                    bool hpSame = (g_LastHp[i] == hp);
+                    if (posSame && hpSame) {
+                        g_StaleFrames[i]++;
+                    } else {
+                        g_StaleFrames[i] = 0;
+                        g_LastPos[i] = pos;
+                        g_LastHp[i] = hp;
+                    }
+                    if (g_StaleFrames[i] > g_Config.staleFrames) continue;
+
                     // distance alpha
                     float dx = pos.x - localPos.x, dy = pos.y - localPos.y, dz = pos.z - localPos.z;
                     float dist = std::sqrt(dx * dx + dy * dy + dz * dz);
                     int alpha = (int)(255.0f * (1.0f - (dist / g_Config.maxFadeDist)));
                     if (alpha < 30) alpha = 30; if (alpha > 255) alpha = 255;
                     rec.alpha = alpha;
+                    rec.dist = dist;
 
                     // predict + head
                     Vector3 velocity = entity.GetVelocity();
@@ -492,8 +528,11 @@ int main() {
                         drawList->AddText({ screenHead.x - 30.0f, screenHead.y - 26.0f }, nameColor, rec.name);
                     }
                     if (g_Config.espDistance) {
-                        float dx = rec.screenFeet.x, dy = rec.screenFeet.y; // placeholder; distance recomputed below
-                        (void)dx; (void)dy;
+                        float dDisp = g_Config.distanceInMetres ? rec.dist / 39.37f : rec.dist;
+                        const char* unit = g_Config.distanceInMetres ? "m" : "u";
+                        char dbuf[24];
+                        snprintf(dbuf, sizeof(dbuf), "%d%s", (int)dDisp, unit);
+                        drawList->AddText({ screenHead.x - 12.0f, screenFeet.y + 2.0f }, nameColor, dbuf);
                     }
                     float height = std::abs(screenFeet.y - screenHead.y);
                     float width = height / 2.1f;
@@ -510,6 +549,7 @@ int main() {
                     }
                 }
             }
+            skipEsp: ;
         }
 
         overlay.EndFrame();

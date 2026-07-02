@@ -30,6 +30,7 @@ struct Config {
     bool espHpText    = true;
     bool espDistance  = true;
     bool bhopEnabled  = false;     // walls-only build: off + writes disabled
+    bool recoilEnabled = false;    // pixel-based anti-recoil
     bool menuOpen     = true;
 
     // ---- rendering options ----
