@@ -426,11 +426,11 @@ int main() {
 
                 // ---- PASS 1: READ (all memory access here) ----
                 for (int i = 1; i < 128; i++) {
-                    // VERIFIED by live probe: stride 0x20, entity ptr at +0x0,
-                    // slot formula base + (i+1)*0x20 (slot 0 = world entity).
-                    // old main used base + i*0x10 (half garbage, half entities).
+                    // VERIFIED by live probe: stride 0x20, entity ptr at +0x0.
+                    // slot 0 (world) at base+0x00, slot 1 at base+0x20, slot 2 at base+0x40.
+                    // formula: base + i * 0x20 (i starts at 1, naturally skips world).
                     uintptr_t entityBase = mem.Read<uintptr_t>(
-                        clientBase + Game::Offsets::dw_BaseEntity + ((i + 1) * Game::Offsets::entityStride));
+                        clientBase + Game::Offsets::dw_BaseEntity + (i * Game::Offsets::entityStride));
                     if (!entityBase || entityBase == localPlayerBase || entityBase < 0x10000) continue;
 
                     Game::Entity entity(entityBase, mem);
