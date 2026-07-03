@@ -101,6 +101,41 @@ void RenderMenu() {
 
         // ---------- ESP tab ----------
         if (ImGui::BeginTabItem("ESP")) {
+            // ---- presets: one-click configs that set toggles + transparency ----
+            ImGui::TextDisabled("presets");
+            if (ImGui::Button("Clean (chams only)")) {
+                g_Config.espEnabled = true;
+                g_Config.espBox = false; g_Config.espHeadDot = false; g_Config.espHealth = false;
+                g_Config.espSnaplines = false; g_Config.espSkeleton = false; g_Config.espChams = true;
+                g_Config.espName = false; g_Config.espHpText = false; g_Config.espDistance = false;
+                g_Config.alphaSkeleton = 0.5f; g_Config.alphaChams = 0.85f;
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Competitive")) {
+                g_Config.espEnabled = true;
+                g_Config.espBox = false; g_Config.espHeadDot = true; g_Config.espHealth = false;
+                g_Config.espSnaplines = false; g_Config.espSkeleton = true; g_Config.espChams = false;
+                g_Config.espName = false; g_Config.espHpText = true; g_Config.espDistance = false;
+                g_Config.alphaSkeleton = 0.45f; g_Config.alphaChams = 0.85f;
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Walls+Chams")) {
+                g_Config.espEnabled = true;
+                g_Config.espBox = false; g_Config.espHeadDot = true; g_Config.espHealth = false;
+                g_Config.espSnaplines = false; g_Config.espSkeleton = false; g_Config.espChams = true;
+                g_Config.espName = false; g_Config.espHpText = true; g_Config.espDistance = false;
+                g_Config.alphaSkeleton = 0.5f; g_Config.alphaChams = 0.7f;
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Everything")) {
+                g_Config.espEnabled = true;
+                g_Config.espBox = true; g_Config.espHeadDot = true; g_Config.espHealth = true;
+                g_Config.espSnaplines = true; g_Config.espSkeleton = true; g_Config.espChams = true;
+                g_Config.espName = true; g_Config.espHpText = true; g_Config.espDistance = true;
+                g_Config.alphaSkeleton = 0.85f; g_Config.alphaChams = 0.85f;
+            }
+            ImGui::Separator();
+
             ImGui::Checkbox("Master ESP", &g_Config.espEnabled);
             if (g_Config.espEnabled) {
                 ImGui::Separator();
