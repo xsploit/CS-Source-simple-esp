@@ -390,9 +390,16 @@ int main() {
                 Matrix4x4 viewMatrix = mem.Read<Matrix4x4>(engineBase + Game::Offsets::dw_ViewMatrix);
                 int localTeam = localPlayer.GetTeam();
                 Vector3 localPos = localPlayer.GetPosition();
-                uintptr_t nameListBase = mem.Read<uintptr_t>(clientBase + 0x609D68);
                 int screenW = overlay.GetWidth();
                 int screenH = overlay.GetHeight();
+
+                // Player resource table — the ground-truth liveness + name source.
+                // m_bConnected[slot] is a bool: false means the slot has been cleaned up
+                // (player disconnected OR round-end corpse cleared). this replaces the
+                // entire stale-position/dormant heuristic mess — it's the engine's own
+                // "is this slot still occupied by a live player" flag, indexed by slot.
+                // m_szName is the same table, const char* per slot.
+                uintptr_t playerResource = mem.Read<uintptr_t>(clientBase + Game::Offsets::dwPlayerResource);
 
                 // ---- NO-FLICKER ARCHITECTURE (per swedz / maintained CS externals) ----
                 // decouple READ from DRAW. the old loop interleaved ReadProcessMemory
@@ -419,7 +426,11 @@ int main() {
 
                 // ---- PASS 1: READ (all memory access here) ----
                 for (int i = 1; i < 128; i++) {
-                    uintptr_t entityBase = mem.Read<uintptr_t>(clientBase + Game::Offsets::dw_BaseEntity + (i * 0x10));
+                    // entity list: stride 0x20, entity pointer at +0x8 (StaLLyyyy dump).
+                    // the old 0x10 stride was skipping every other entity.
+                    uintptr_t entityBase = mem.Read<uintptr_t>(
+                        clientBase + Game::Offsets::dw_BaseEntity + (i * Game::Offsets::entityStride)
+                        + Game::Offsets::entityPtrOff);
                     if (!entityBase || entityBase == localPlayerBase || entityBase < 0x10000) continue;
 
                     Game::Entity entity(entityBase, mem);
@@ -427,13 +438,18 @@ int main() {
                     int entityTeam = entity.GetTeam();
                     Vector3 pos = entity.GetPosition();
 
-                    // DORMANT (float compare): read as float vs local player.
-                    // if they differ → entity dormant (server stopped updating).
-                    // x86=0x60; x64 ~0x80-0xA0 — we'll scan to find working offset.
-                    static uintptr_t g_DormantOff = 0x8C;
-                    float myDormant = mem.Read<float>(localPlayerBase + g_DormantOff);
-                    float entDormant = mem.Read<float>(entityBase + g_DormantOff);
-                    if (entDormant != myDormant) continue;
+                    // GROUND-TRUTH LIVENESS: the player_resource m_bConnected table.
+                    // this replaces the dormant heuristic entirely — m_bDormant is NOT a
+                    // netvar in this build (externally unreadable), so every dormant
+                    // offset we tried was garbage. m_bConnected[slot] is the engine's
+                    // own "is this slot still occupied by a live player" bool. a
+                    // round-end corpse / disconnected slot reads false. a camper reads
+                    // true forever. no heuristic, no tuning, no false positives.
+                    if (playerResource && playerResource >= 0x10000) {
+                        bool connected = mem.Read<bool>(
+                            playerResource + Game::Offsets::pr_m_bConnected + (i * sizeof(bool)));
+                        if (!connected) continue;
+                    }
 
                     uint8_t lifeState = mem.Read<uint8_t>(entityBase + g_LifeOff);
                     if (lifeState != 0) continue;
@@ -451,8 +467,12 @@ int main() {
                     RenderRecord rec = {};
                     rec.hp = hp; rec.entityTeam = entityTeam; rec.isMate = (entityTeam == localTeam);
                     rec.hasName = false;
-                    if (nameListBase && nameListBase >= 0x10000) {
-                        uintptr_t np = mem.Read<uintptr_t>(nameListBase + 0x798 + (i * 0x4));
+                    // name from the player_resource m_szName table (const char* per slot).
+                    // was: hardcoded 0x609D68 + 0x798 — now uses the verified dwPlayerResource
+                    // + pr_m_szName offset, same table the connected flag lives in.
+                    if (playerResource && playerResource >= 0x10000) {
+                        uintptr_t np = mem.Read<uintptr_t>(
+                            playerResource + Game::Offsets::pr_m_szName + (i * sizeof(uintptr_t)));
                         if (np && np >= 0x10000) {
                             if (ReadProcessMemory(mem.GetHandle(), (LPCVOID)np, rec.name, sizeof(rec.name) - 1, nullptr) && rec.name[0])
                                 rec.hasName = true;
