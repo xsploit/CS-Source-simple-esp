@@ -426,11 +426,11 @@ int main() {
 
                 // ---- PASS 1: READ (all memory access here) ----
                 for (int i = 1; i < 128; i++) {
-                    // entity list: stride 0x20, entity pointer at +0x8 (StaLLyyyy dump).
-                    // the old 0x10 stride was skipping every other entity.
+                    // VERIFIED by live probe: stride 0x20, entity ptr at +0x0,
+                    // slot formula base + (i+1)*0x20 (slot 0 = world entity).
+                    // old main used base + i*0x10 (half garbage, half entities).
                     uintptr_t entityBase = mem.Read<uintptr_t>(
-                        clientBase + Game::Offsets::dw_BaseEntity + (i * Game::Offsets::entityStride)
-                        + Game::Offsets::entityPtrOff);
+                        clientBase + Game::Offsets::dw_BaseEntity + ((i + 1) * Game::Offsets::entityStride));
                     if (!entityBase || entityBase == localPlayerBase || entityBase < 0x10000) continue;
 
                     Game::Entity entity(entityBase, mem);

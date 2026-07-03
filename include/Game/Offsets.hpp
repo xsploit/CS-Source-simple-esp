@@ -18,7 +18,7 @@ namespace Game {
     namespace Offsets {
         // Module Bases (for reference, will be retrieved at runtime)
         // client.dll
-        constexpr uintptr_t dw_BaseEntity       = 0x6498C8; // entity list (was 0x6098C8 — StaLLyyyy)
+        constexpr uintptr_t dw_BaseEntity       = 0x6098C8; // VERIFIED by live probe — StaLyyyy's 0x6498C8 was wrong
         constexpr uintptr_t dwLocalPlayer       = 0x5F4B68; // local player
         constexpr uintptr_t dw_ABaseEntity      = 0x5AE9F8; // handle/entity entries
         constexpr uintptr_t dwPlayerResource    = 0x5FDF98; // C_PlayerResource* (NEW — liveness table)
@@ -60,8 +60,9 @@ namespace Game {
         constexpr uintptr_t m_iClip1            = 0xC30;  // StaLLyyyy (was 0x8BC — corrected)
 
         // entity list layout (StaLLyyyy: stride 0x20, entity ptr at +0x8)
-        constexpr uintptr_t entityStride         = 0x20;   // CORRECTED (was 0x10 — skipping half!)
-        constexpr uintptr_t entityPtrOff         = 0x8;
+        constexpr uintptr_t entityStride         = 0x20;   // VERIFIED by live probe
+        // entity pointer at +0x0 within each entry (NOT +0x8 — that was wrong)
+        // slot formula: base + (i+1) * 0x20 for slot i (slot 0 = world)
 
         // player_resource tables (the liveness ground truth)
         constexpr uintptr_t pr_m_szName          = 0x790;  // const char* table, indexed by slot 1..64
