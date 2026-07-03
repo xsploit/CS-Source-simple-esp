@@ -39,13 +39,17 @@ serial/metadata at:   +0x08, +0x10, +0x18 within each entry
 ### Slot formula
 ```
 slot 0 (world entity):  base + 0x00
-slot i (player i):      base + (i + 1) * 0x20    ← i is 1-indexed
+slot i (player i):      base + i * 0x20          ← i starts at 1, naturally skips world
 ```
+
+**CORRECTION:** the initial probe analysis said `(i+1) * 0x20` — that was an
+off-by-one that skipped slot 1 (the first real player). fixed in commit ab153e5
+after a bot in slot 1 wasn't rendering. the correct formula is simply
+`base + i * 0x20` where i starts at 1.
 
 **NOTE:** Our main branch used `base + i * 0x10`, which accidentally worked
 because it hit entity pointers on even indices and metadata on odd indices.
-It was reading HALF the entities and HALF garbage. The correct formula is
-`base + (i + 1) * 0x20`.
+It was reading HALF the entities and HALF garbage.
 
 ### Entity pointer validation
 A valid entity pointer is a heap pointer in the range
@@ -234,7 +238,7 @@ The ESP code changes needed (on the `verified-offsets` branch):
 uintptr_t entityBase = mem.Read<uintptr_t>(clientBase + 0x6098C8 + (i * 0x10));
 
 // NEW (verified):
-uintptr_t entityBase = mem.Read<uintptr_t>(clientBase + 0x6098C8 + ((i + 1) * 0x20));
+uintptr_t entityBase = mem.Read<uintptr_t>(clientBase + 0x6098C8 + (i * 0x20));
 ```
 
 ### Liveness filter
@@ -262,3 +266,67 @@ uintptr_t np = mem.Read<uintptr_t>(playerResource + 0x790 + (i * 0x8));
 - All dormant checks (0x214, 0x8C, float-compare — all garbage)
 - All stale-position tracking (g_LastPos, g_StaleFrames, staleFrames config)
 - Old name list hardcoded offset (0x609D68)
+
+---
+
+## 12. NETVAR DUMPER (for future offset updates)
+
+Two dumper implementations — both walk the Source engine's ClientClass linked
+list externally and dump every netvar for every class. run when CS:S updates
+and offsets shift. no more forum hunting.
+
+### dumper.lua (CE Lua — recommended, simplest)
+- paste into CE Lua Engine (Ctrl+L), Execute
+- output: `Desktop/netvar_dump.txt`
+- zero dependencies beyond CE itself
+
+### dumper.py (Python via CE MCP bridge)
+- talks to the TCP relay on 127.0.0.1:9876
+- same output, more debug info
+- needs the relay + bridge running
+
+**KNOWN ISSUE:** `RP_OFFSET = 0x4C` (the position of the offset field within
+RecvProp on x64) is an estimate. if the dump shows 0x0000 for everything,
+that number needs adjusting. the scripts print enough debug data to calibrate.
+
+---
+
+## 13. INTERNAL REFERENCE FINDINGS (from cssourcex64 UC source)
+
+The `cssourcex64` source (Downloads folder) is a full internal CS:S x64 cheat
+with SDK access. Key insights for our external project:
+
+### deadflag netvar
+```cpp
+// from NetVar.h:
+inline bool& get_deadflag(C_BaseEntity* ent) {
+    static const ptrdiff_t offset = NetVar::Get("CCSPlayer", "deadflag");
+    ...
+}
+```
+`CCSPlayer::deadflag` is a netvar (externally readable) that could be an
+ALTERNATIVE liveness signal to m_bConnected. we haven't probed it yet but
+it's worth testing — if deadflag reads true for corpses, it's simpler than
+the player_resource table.
+
+### ECSClientClass enum (class IDs)
+`CCSPlayer = 27` in the ClientClass enum. an internal cheat uses this to
+identify player entities. externally we use movetype/team/HP validation
+instead, but the class ID is available at `ClientClass + 0x28` if we ever
+walk the class list.
+
+### IsDormant is a VTABLE CALL, not a field
+confirmed by the cssourcex64 code calling `pEntity->IsDormant()` as a virtual
+function. this is why it's externally unreadable — it's index ~8 in the
+`IClientNetworkable` vtable, not a struct field. the StaLyyyy dump note
+(`m_bDormant = 0x0 // not a RecvProp`) confirms: it does not exist as a
+networked property. our m_bConnected approach is the correct external path.
+
+### Dynamic netvar resolution (the gold standard)
+the internal cheat resolves ALL offsets at runtime via:
+```cpp
+NetVar::Get("CCSPlayer", "m_iHealth")
+```
+which walks `ClientClass->GetAllClasses()` → `RecvTable` → `RecvProp` by name.
+this is what our dumper.lua/dumper.py replicate externally — same data,
+no injection.
