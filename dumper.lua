@@ -17,8 +17,8 @@ local RT_NETTABLENAME = 0x18  -- const char* m_pNetTableName
 
 local RP_VARNAME      = 0x00  -- const char* m_pVarName
 local RP_RECVTYPE     = 0x08  -- int m_RecvType
-local RP_OFFSET       = 0x4C  -- int m_Offset (ESTIMATED — adjust if wrong)
-local RP_SIZE         = 0x58  -- sizeof(RecvProp) on x64 (estimated)
+local RP_OFFSET       = 0x38  -- int m_Offset (calibrated from raw dump — prop pointers at +0x00, repeat every 0x80)
+local RP_SIZE         = 0x80  -- sizeof(RecvProp) on x64 (calibrated from raw dump)
 
 local DPT_NAMES = {
   [0]="int",[1]="float",[2]="vec3",[3]="vec2",
@@ -50,7 +50,9 @@ local ccHead = nil
 
 for _, search in ipairs(searchStrings) do
   print(string.format("scanning for '%s'...", search.name))
-  local results = AOBScan(search.bytes, "+X-W-C")
+  -- use *W-C (writable+copy-on-write) OR just scan everything with no region filter
+  -- the class name strings live in read-only data sections, not executable memory
+  local results = AOBScan(search.bytes)
   if results and results.Count > 0 then
     print(string.format("  found %d hit(s)", results.Count))
     -- for each string hit, scan for a pointer TO it (the m_pNetworkName field)
@@ -68,7 +70,7 @@ for _, search in ipairs(searchStrings) do
       local ptrAOB = string.format("%02X %02X %02X %02X %02X %02X %02X %02X",
                                    p1, p2, p3, p4, p5, p6, p7, p8)
 
-      local ptrResults = AOBScan(ptrAOB, "+X-W-C")
+      local ptrResults = AOBScan(ptrAOB)
       if ptrResults and ptrResults.Count > 0 then
         print(string.format("  found %d pointer(s) to '%s' string", ptrResults.Count, search.name))
         -- check each pointer hit — if it's a m_pNetworkName field,

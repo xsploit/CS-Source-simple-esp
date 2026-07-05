@@ -289,6 +289,32 @@ and offsets shift. no more forum hunting.
 RecvProp on x64) is an estimate. if the dump shows 0x0000 for everything,
 that number needs adjusting. the scripts print enough debug data to calibrate.
 
+**UPDATE (live probe):** the RecvProp struct layout on v93 x64 is:
+```
++0x00: vtable pointer (constant)
++0x10: type (DPT enum: 0=int, 1=float, 2=vec3, 6=DataTable)
++0x30: flags (always 1)
++0x34: -1 (always)
++0x38: parent table name pointer (e.g. "DT_BaseAnimating")
++0x48: var name pointer (e.g. "m_vecOrigin")
++0x54: RELATIVE offset within parent sub-table (NOT absolute!)
+stride: 0x80 per prop
+```
+
+the offset at +0x54 is RELATIVE to the sub-table, not the entity.
+Source uses hierarchical netvars: `m_vecOrigin` in `DT_BaseEntity` has a
+relative offset, and the full offset requires summing up the inheritance
+chain (baseclass offsets + subtable offsets). the internal `NetVar::Get`
+function does this via recursion.
+
+to get the absolute offset, the dumper must be a **tree-walker**: for each
+DataTable prop, recurse into its sub-table and add the parent's relative
+offset. this is what the internal dumper does and what our external dumper
+needs to replicate.
+
+the current dumper.lua/dumper.py need updating to walk the tree instead of
+reading flat offsets. this is a known TODO.
+
 ---
 
 ## 13. INTERNAL REFERENCE FINDINGS (from cssourcex64 UC source)

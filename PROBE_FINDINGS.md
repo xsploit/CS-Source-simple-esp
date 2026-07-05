@@ -43,12 +43,14 @@ forum dump. This supersedes all prior offset claims when they conflict.
 ## ❌ UNVERIFIED / NEEDS MORE PROBING
 
 ### m_vecVelocity
-- `+0x148` (StaLLyyyy): reads [0,0,0] on all probed entities
-- `+0x434` (old guess): reads [0,0,0] on all probed entities
-- **status:** cannot confirm either — all bots were stationary during probe.
-  need to re-probe while a bot is moving to see which offset changes.
-  both could be wrong, or both could be right (zero velocity = standing).
-  LOW PRIORITY — velocity prediction is cosmetic, not load-bearing.
+- `+0x148` (StaLLyyyy): ✅ **CONFIRMED WORKING** — reads nonzero values (100-240 range)
+  for alive/moving bots, zero for dead/idle bots. StaLLyyyy was right.
+- `+0x434` (old guess): ❌ WRONG — reads [0,0,0] on all entities. dead offset.
+- sample from live probe (moving bots):
+  - slot 2 HP=100: vel=[237, -39, 20]
+  - slot 3 HP=100: vel=[18, -97, 0]
+  - slot 8 HP=100: vel=[141, 191, -10]
+  - slot 1 HP=1 (dead): vel=[0, 0, 0] ✓
 
 ### Liveness signal (the camper/corpse problem)
 - `m_bDormant`: NOT a netvar in this build (StaLLyyyy dump confirms). externally unreadable. ABANDONED.
