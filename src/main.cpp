@@ -425,51 +425,62 @@ int main() {
                 records.reserve(32);
 
                 // ---- PASS 1: READ (all memory access here) ----
+                // BATCH READ: one ReadProcessMemory of ENTITY_BUF_SIZE bytes per entity,
+                // then parse all fields from the local buffer. this replaces ~11 small
+                // RPM calls per entity with 1 big one — RPM has near-fixed overhead
+                // regardless of size, so reading 0x900 bytes is ~the same cost as
+                // reading 4 bytes. for 16 bots this drops us from ~176 syscalls/frame
+                // to ~17, eliminating the stutter.
+                constexpr size_t ENTITY_BUF_SIZE = 0x900; // covers 0x00 through bone matrix ptr (0x810+)
+                uint8_t entBuf[ENTITY_BUF_SIZE];
+
                 for (int i = 1; i < 128; i++) {
                     // VERIFIED by live probe: stride 0x20, entity ptr at +0x0.
-                    // slot 0 (world) at base+0x00, slot 1 at base+0x20, slot 2 at base+0x40.
-                    // formula: base + i * 0x20 (i starts at 1, naturally skips world).
                     uintptr_t entityBase = mem.Read<uintptr_t>(
                         clientBase + Game::Offsets::dw_BaseEntity + (i * Game::Offsets::entityStride));
                     if (!entityBase || entityBase == localPlayerBase || entityBase < 0x10000) continue;
 
-                    Game::Entity entity(entityBase, mem);
-                    int hp = entity.GetHealth();
-                    int entityTeam = entity.GetTeam();
-                    Vector3 pos = entity.GetPosition();
+                    // BULK READ — one RPM call gets the whole entity struct
+                    SIZE_T bytesRead = 0;
+                    if (!ReadProcessMemory(mem.GetHandle(), (LPCVOID)entityBase, entBuf, ENTITY_BUF_SIZE, &bytesRead)
+                        || bytesRead < 0x450) {
+                        continue; // read failed or too short — skip this entity
+                    }
 
-                    // GROUND-TRUTH LIVENESS: the player_resource m_bConnected table.
-                    // this replaces the dormant heuristic entirely — m_bDormant is NOT a
-                    // netvar in this build (externally unreadable), so every dormant
-                    // offset we tried was garbage. m_bConnected[slot] is the engine's
-                    // own "is this slot still occupied by a live player" bool. a
-                    // round-end corpse / disconnected slot reads false. a camper reads
-                    // true forever. no heuristic, no tuning, no false positives.
+                    // parse fields from the local buffer (zero RPM cost)
+                    auto readInt  = [&](size_t off) -> int { return *(int*)(entBuf + off); };
+                    auto readByte = [&](size_t off) -> uint8_t { return entBuf[off]; };
+                    auto readFloat3 = [&](size_t off) -> Vector3 {
+                        return { *(float*)(entBuf + off), *(float*)(entBuf + off + 4), *(float*)(entBuf + off + 8) };
+                    };
+
+                    int hp = readInt(Game::Offsets::m_iHealth);
+                    int entityTeam = readInt(Game::Offsets::m_iTeamNum);
+                    Vector3 pos = readFloat3(Game::Offsets::m_vecOrigin);
+
+                    // GROUND-TRUTH LIVENESS: m_bConnected from player resource table
                     if (playerResource && playerResource >= 0x10000) {
                         bool connected = mem.Read<bool>(
                             playerResource + Game::Offsets::pr_m_bConnected + (i * sizeof(bool)));
                         if (!connected) continue;
                     }
 
-                    uint8_t lifeState = mem.Read<uint8_t>(entityBase + g_LifeOff);
+                    uint8_t lifeState = readByte(g_LifeOff);
                     if (lifeState != 0) continue;
                     if (hp <= 0 || hp > 100) continue;
                     if (entityTeam < 2 || entityTeam > 3) continue;
                     if (std::abs(pos.x) < 1.0f && std::abs(pos.y) < 1.0f && std::abs(pos.z) < 1.0f) continue;
                     if (!g_Config.espTeam && entityTeam == localTeam) continue;
 
-                    int modelIdx = mem.Read<int>(entityBase + 0xCC);
+                    int modelIdx = readInt(0xCC);
                     if (modelIdx <= 0) continue;
-                    int moveType = mem.Read<int>(entityBase + Game::Offsets::m_MoveType);
+                    int moveType = readInt(Game::Offsets::m_MoveType);
                     if (moveType < 2 || moveType > 11) continue;
 
                     // name (cached once, not re-read at draw)
                     RenderRecord rec = {};
                     rec.hp = hp; rec.entityTeam = entityTeam; rec.isMate = (entityTeam == localTeam);
                     rec.hasName = false;
-                    // name from the player_resource m_szName table (const char* per slot).
-                    // was: hardcoded 0x609D68 + 0x798 — now uses the verified dwPlayerResource
-                    // + pr_m_szName offset, same table the connected flag lives in.
                     if (playerResource && playerResource >= 0x10000) {
                         uintptr_t np = mem.Read<uintptr_t>(
                             playerResource + Game::Offsets::pr_m_szName + (i * sizeof(uintptr_t)));
@@ -480,22 +491,6 @@ int main() {
                     }
                     if (!rec.hasName) continue;
 
-                    // position-stale + HP-stale: entity frozen AND HP unchanged
-                    // for too long = dead/disconnected. dual-signal avoids false
-                    // positives on campers (their HP changes on hit).
-                    bool posSame = (std::abs(g_LastPos[i].x - pos.x) < 0.1f &&
-                                    std::abs(g_LastPos[i].y - pos.y) < 0.1f &&
-                                    std::abs(g_LastPos[i].z - pos.z) < 0.1f);
-                    bool hpSame = (g_LastHp[i] == hp);
-                    if (posSame && hpSame) {
-                        g_StaleFrames[i]++;
-                    } else {
-                        g_StaleFrames[i] = 0;
-                        g_LastPos[i] = pos;
-                        g_LastHp[i] = hp;
-                    }
-                    if (g_StaleFrames[i] > g_Config.staleFrames) continue;
-
                     // distance alpha
                     float dx = pos.x - localPos.x, dy = pos.y - localPos.y, dz = pos.z - localPos.z;
                     float dist = std::sqrt(dx * dx + dy * dy + dz * dz);
@@ -504,13 +499,23 @@ int main() {
                     rec.alpha = alpha;
                     rec.dist = dist;
 
-                    // predict + head
-                    Vector3 velocity = entity.GetVelocity();
+                    // predict + head — velocity read from buffer (verified offset 0x148)
+                    Vector3 velocity = readFloat3(Game::Offsets::m_vecVelocity);
                     Vector3 predictedPos = { pos.x + velocity.x * 0.03f, pos.y + velocity.y * 0.03f, pos.z + velocity.z * 0.03f };
+                    // bone matrix pointer from buffer
+                    uintptr_t bm = *(uintptr_t*)(entBuf + g_BoneOff);
                     Vector3 headPos;
-                    uintptr_t bm = mem.Read<uintptr_t>(entityBase + g_BoneOff);
-                    if (bm && bm >= 0x10000) headPos = mem.Read<Matrix3x4>(bm + 14 * 48).GetOrigin();
-                    else headPos = predictedPos + mem.Read<Vector3>(entityBase + Game::Offsets::m_vecViewOffset);
+                    if (bm && bm >= 0x10000) {
+                        // bone read stays a separate RPM (different allocation)
+                        Matrix3x4 headBone;
+                        SIZE_T br = 0;
+                        if (ReadProcessMemory(mem.GetHandle(), (LPCVOID)(bm + 14 * 48), &headBone, sizeof(headBone), &br) && br == sizeof(headBone))
+                            headPos = headBone.GetOrigin();
+                        else
+                            headPos = predictedPos + readFloat3(Game::Offsets::m_vecViewOffset);
+                    } else {
+                        headPos = predictedPos + readFloat3(Game::Offsets::m_vecViewOffset);
+                    }
 
                     // project feet + head
                     rec.headLifted = Utils::WorldToScreen(predictedPos, rec.screenFeet, viewMatrix, screenW, screenH) &&
@@ -532,17 +537,25 @@ int main() {
                         rec.headRadius = g_Config.headDotRadius;
                     }
 
-                    // bones (read + project, no draw)
+                    // bones (batch read + project, no draw)
+                    // batch: read all 32 bones in ONE RPM call (32 × 48 bytes = 1536 bytes)
+                    // instead of 32 individual reads. another ~30x reduction in syscalls
+                    // when skeleton/chams is enabled.
                     rec.hasBones = false;
                     if ((g_Config.espSkeleton || g_Config.espChams) && bm && bm >= 0x10000) {
-                        Vector3 bonesWorld[g_BoneCount];
-                        bool allFail = true;
-                        for (int bn = 0; bn < g_BoneCount; bn++) {
-                            bonesWorld[bn] = mem.Read<Matrix3x4>(bm + bn * 48).GetOrigin();
-                            rec.boneValid[bn] = Utils::WorldToScreen(bonesWorld[bn], rec.bonesScreen[bn], viewMatrix, screenW, screenH);
-                            if (rec.boneValid[bn]) allFail = false;
+                        Matrix3x4 boneBuf[g_BoneCount];
+                        SIZE_T br = 0;
+                        if (ReadProcessMemory(mem.GetHandle(), (LPCVOID)bm, boneBuf,
+                                              g_BoneCount * sizeof(Matrix3x4), &br)
+                            && br == g_BoneCount * sizeof(Matrix3x4)) {
+                            bool allFail = true;
+                            for (int bn = 0; bn < g_BoneCount; bn++) {
+                                Vector3 bw = boneBuf[bn].GetOrigin();
+                                rec.boneValid[bn] = Utils::WorldToScreen(bw, rec.bonesScreen[bn], viewMatrix, screenW, screenH);
+                                if (rec.boneValid[bn]) allFail = false;
+                            }
+                            rec.hasBones = !allFail;
                         }
-                        rec.hasBones = !allFail;
                     }
 
                     if (f3Pressed) {
