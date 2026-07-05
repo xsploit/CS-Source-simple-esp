@@ -491,6 +491,27 @@ int main() {
                     }
                     if (!rec.hasName) continue;
 
+                    // STALE FILTER — m_bConnected handles DISCONNECTION but NOT death.
+                    // a dead player is still "connected" to the server, so m_bConnected
+                    // stays 1 until they fully leave. this catches round-end corpses:
+                    // a player frozen in place with unchanged HP for too long = dead.
+                    // dual-signal (pos + HP) avoids false positives on campers who
+                    // get hit (HP changes, resets the counter).
+                    {
+                        bool posSame = (std::abs(g_LastPos[i].x - pos.x) < 0.1f &&
+                                        std::abs(g_LastPos[i].y - pos.y) < 0.1f &&
+                                        std::abs(g_LastPos[i].z - pos.z) < 0.1f);
+                        bool hpSame = (g_LastHp[i] == hp);
+                        if (posSame && hpSame) {
+                            g_StaleFrames[i]++;
+                        } else {
+                            g_StaleFrames[i] = 0;
+                            g_LastPos[i] = pos;
+                            g_LastHp[i] = hp;
+                        }
+                        if (g_StaleFrames[i] > g_Config.staleFrames) continue;
+                    }
+
                     // distance alpha
                     float dx = pos.x - localPos.x, dy = pos.y - localPos.y, dz = pos.z - localPos.z;
                     float dist = std::sqrt(dx * dx + dy * dy + dz * dz);
